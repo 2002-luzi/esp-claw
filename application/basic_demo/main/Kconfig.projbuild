@@ -114,4 +114,70 @@ config BASIC_DEMO_TIME_TIMEZONE
     help
         POSIX-style timezone string used by the time cap.
 
+config BASIC_DEMO_TTS_XFYUN_APP_ID
+    string "Default XFYun TTS app ID"
+    default ""
+    help
+        Default XFYun TTS app ID used to populate the local TTS runtime settings.
+
+config BASIC_DEMO_TTS_XFYUN_API_KEY
+    string "Default XFYun TTS API key"
+    default ""
+    help
+        Default XFYun TTS API key used to populate the local TTS runtime settings.
+
+config BASIC_DEMO_TTS_XFYUN_API_SECRET
+    string "Default XFYun TTS API secret"
+    default ""
+    help
+        Default XFYun TTS API secret used to populate the local TTS runtime settings.
+
+config BASIC_DEMO_TTS_XFYUN_VOICE_NAME
+    string "Default XFYun TTS voice name"
+    default "x4_yezi"
+    help
+        Default XFYun voice name such as x4_yezi.
+
+config BASIC_DEMO_TTS_XFYUN_AUDIO_ENCODING
+    string "Default XFYun TTS audio encoding"
+    default "raw"
+    help
+        Default XFYun audio encoding expected by the local playback path.
+
+config BASIC_DEMO_TTS_XFYUN_AUDIO_FORMAT
+    string "Default XFYun TTS audio format"
+    default "audio/L16;rate=16000"
+    help
+        Default XFYun audio format string, for example audio/L16;rate=16000.
+
+config BASIC_DEMO_TTS_XFYUN_TEXT_ENCODING
+    string "Default XFYun TTS text encoding"
+    default "utf8"
+    help
+        Default text encoding sent to the XFYun TTS provider.
+
+config BASIC_DEMO_TTS_XFYUN_WEBSOCKET_URI
+    string "Default XFYun TTS websocket URI"
+    default "wss://tts-api.xfyun.cn/v2/tts"
+    help
+        Default websocket endpoint for the XFYun TTS provider.
+
+config BASIC_DEMO_TTS_XFYUN_AUTH_HOST
+    string "Default XFYun TTS auth host"
+    default "tts-api.xfyun.cn"
+    help
+        Host name used when generating the XFYun websocket authorization header.
+
+config BASIC_DEMO_TTS_TIMEOUT_MS
+    string "Default TTS provider timeout ms"
+    default "30000"
+    help
+        Timeout in milliseconds for one outbound TTS request.
+
+config BASIC_DEMO_TTS_ENABLE_SPEAKER_OUTPUT
+    bool "Enable board speaker output for TTS"
+    default n
+    help
+        Enable the board-specific speaker adapter. Leave disabled for provider-only bring-up.
+
 endmenu

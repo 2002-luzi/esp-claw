@@ -5,8 +5,11 @@
  */
 #include "app_clawgent.h"
 
+#include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
+#include "basic_demo_board_audio.h"
 #include "basic_demo_lua_modules.h"
 #include "cap_cli.h"
 #include "cap_files.h"
@@ -19,6 +22,7 @@
 #include "cap_mcp_server.h"
 #include "cap_skill.h"
 #include "cap_time.h"
+#include "cap_tts.h"
 #include "cap_web_search.h"
 #include "claw_event_router.h"
 #include "claw_cap.h"
@@ -63,9 +67,47 @@ static const char *const BASIC_DEMO_LLM_VISIBLE_GROUPS[] = {
     "`-- skills/\n" \
     "    |-- xxx.md\n" \
     "    |-- skills_list.json\n" \
-    "    `-- weather.md\n" \
+    "    `-- weather.md\n"
 
 esp_err_t basic_demo_cli_start(void);
+
+static uint32_t parse_timeout_ms(const char *value, uint32_t fallback)
+{
+    unsigned long parsed;
+
+    if (value == NULL || value[0] == '\0') {
+        return fallback;
+    }
+
+    parsed = strtoul(value, NULL, 10);
+    if (parsed == 0 || parsed > UINT32_MAX) {
+        return fallback;
+    }
+
+    return (uint32_t)parsed;
+}
+
+static esp_err_t init_tts_runtime(const basic_demo_settings_t *settings)
+{
+    if (!settings) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return cap_tts_init_runtime(&(cap_tts_runtime_config_t) {
+        .xfyun_app_id = settings->tts_xfyun_app_id,
+        .xfyun_api_key = settings->tts_xfyun_api_key,
+        .xfyun_api_secret = settings->tts_xfyun_api_secret,
+        .xfyun_voice_name = settings->tts_xfyun_voice_name,
+        .xfyun_audio_encoding = settings->tts_xfyun_audio_encoding,
+        .xfyun_audio_format = settings->tts_xfyun_audio_format,
+        .xfyun_text_encoding = settings->tts_xfyun_text_encoding,
+        .xfyun_websocket_uri = settings->tts_xfyun_websocket_uri,
+        .xfyun_auth_host = settings->tts_xfyun_auth_host,
+        .timeout_ms = parse_timeout_ms(settings->tts_timeout_ms, 30000),
+        .enable_speaker_output = BASIC_DEMO_TTS_ENABLE_SPEAKER_OUTPUT,
+        .speaker_init = basic_demo_board_audio_init,
+    });
+}
 
 static esp_err_t init_memory(void)
 {
@@ -100,7 +142,7 @@ static esp_err_t init_skills(void)
 static esp_err_t init_capabilities(const basic_demo_settings_t *settings)
 {
     claw_cap_config_t cap_config = {
-        .max_capabilities = 32,
+        .max_capabilities = 37,
         .max_groups = 16,
     };
 
@@ -276,6 +318,7 @@ static esp_err_t init_capabilities(const basic_demo_settings_t *settings)
                         TAG,
                         "Failed to register skill cap");
     ESP_RETURN_ON_ERROR(cap_time_register_group(), TAG, "Failed to register time cap");
+    ESP_RETURN_ON_ERROR(cap_tts_register_group(), TAG, "Failed to register TTS cap");
     ESP_RETURN_ON_ERROR(cap_llm_inspect_register_group(),
                         TAG,
                         "Failed to register LLM inspect cap");
@@ -315,6 +358,7 @@ esp_err_t app_clawgent_start(const basic_demo_settings_t *settings)
                         "Failed to init event router");
     ESP_RETURN_ON_ERROR(init_memory(), TAG, "Failed to init memory");
     ESP_RETURN_ON_ERROR(init_skills(), TAG, "Failed to init skills");
+    ESP_RETURN_ON_ERROR(init_tts_runtime(settings), TAG, "Failed to init TTS runtime");
     ESP_RETURN_ON_ERROR(init_capabilities(settings), TAG, "Failed to init capabilities");
     ESP_RETURN_ON_ERROR(claw_event_router_register_outbound_binding("qq", "qq_send_message"),
                         TAG,

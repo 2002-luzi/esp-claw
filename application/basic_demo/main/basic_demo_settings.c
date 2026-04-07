@@ -52,6 +52,16 @@ static void settings_load_defaults(basic_demo_settings_t *settings)
     settings_safe_copy(settings->search_brave_key, sizeof(settings->search_brave_key), BASIC_DEMO_SEARCH_BRAVE_KEY);
     settings_safe_copy(settings->search_tavily_key, sizeof(settings->search_tavily_key), BASIC_DEMO_SEARCH_TAVILY_KEY);
     settings_safe_copy(settings->time_timezone, sizeof(settings->time_timezone), BASIC_DEMO_TIME_TIMEZONE);
+    settings_safe_copy(settings->tts_xfyun_app_id, sizeof(settings->tts_xfyun_app_id), BASIC_DEMO_TTS_XFYUN_APP_ID);
+    settings_safe_copy(settings->tts_xfyun_api_key, sizeof(settings->tts_xfyun_api_key), BASIC_DEMO_TTS_XFYUN_API_KEY);
+    settings_safe_copy(settings->tts_xfyun_api_secret, sizeof(settings->tts_xfyun_api_secret), BASIC_DEMO_TTS_XFYUN_API_SECRET);
+    settings_safe_copy(settings->tts_xfyun_voice_name, sizeof(settings->tts_xfyun_voice_name), BASIC_DEMO_TTS_XFYUN_VOICE_NAME);
+    settings_safe_copy(settings->tts_xfyun_audio_encoding, sizeof(settings->tts_xfyun_audio_encoding), BASIC_DEMO_TTS_XFYUN_AUDIO_ENCODING);
+    settings_safe_copy(settings->tts_xfyun_audio_format, sizeof(settings->tts_xfyun_audio_format), BASIC_DEMO_TTS_XFYUN_AUDIO_FORMAT);
+    settings_safe_copy(settings->tts_xfyun_text_encoding, sizeof(settings->tts_xfyun_text_encoding), BASIC_DEMO_TTS_XFYUN_TEXT_ENCODING);
+    settings_safe_copy(settings->tts_xfyun_websocket_uri, sizeof(settings->tts_xfyun_websocket_uri), BASIC_DEMO_TTS_XFYUN_WEBSOCKET_URI);
+    settings_safe_copy(settings->tts_xfyun_auth_host, sizeof(settings->tts_xfyun_auth_host), BASIC_DEMO_TTS_XFYUN_AUTH_HOST);
+    settings_safe_copy(settings->tts_timeout_ms, sizeof(settings->tts_timeout_ms), BASIC_DEMO_TTS_TIMEOUT_MS);
 }
 
 static esp_err_t settings_open(nvs_open_mode_t mode, nvs_handle_t *handle)
@@ -118,6 +128,16 @@ esp_err_t basic_demo_settings_load(basic_demo_settings_t *settings)
         { "search_brave_key", settings->search_brave_key, settings->search_brave_key, sizeof(settings->search_brave_key) },
         { "search_tavily_key", settings->search_tavily_key, settings->search_tavily_key, sizeof(settings->search_tavily_key) },
         { "time_timezone", settings->time_timezone, settings->time_timezone, sizeof(settings->time_timezone) },
+        { "tts_xfyun_app_id", settings->tts_xfyun_app_id, settings->tts_xfyun_app_id, sizeof(settings->tts_xfyun_app_id) },
+        { "tts_xfyun_api_key", settings->tts_xfyun_api_key, settings->tts_xfyun_api_key, sizeof(settings->tts_xfyun_api_key) },
+        { "tts_xfyun_api_secret", settings->tts_xfyun_api_secret, settings->tts_xfyun_api_secret, sizeof(settings->tts_xfyun_api_secret) },
+        { "tts_xfyun_voice_name", settings->tts_xfyun_voice_name, settings->tts_xfyun_voice_name, sizeof(settings->tts_xfyun_voice_name) },
+        { "tts_xfyun_audio_encoding", settings->tts_xfyun_audio_encoding, settings->tts_xfyun_audio_encoding, sizeof(settings->tts_xfyun_audio_encoding) },
+        { "tts_xfyun_audio_format", settings->tts_xfyun_audio_format, settings->tts_xfyun_audio_format, sizeof(settings->tts_xfyun_audio_format) },
+        { "tts_xfyun_text_encoding", settings->tts_xfyun_text_encoding, settings->tts_xfyun_text_encoding, sizeof(settings->tts_xfyun_text_encoding) },
+        { "tts_xfyun_websocket_uri", settings->tts_xfyun_websocket_uri, settings->tts_xfyun_websocket_uri, sizeof(settings->tts_xfyun_websocket_uri) },
+        { "tts_xfyun_auth_host", settings->tts_xfyun_auth_host, settings->tts_xfyun_auth_host, sizeof(settings->tts_xfyun_auth_host) },
+        { "tts_timeout_ms", settings->tts_timeout_ms, settings->tts_timeout_ms, sizeof(settings->tts_timeout_ms) },
     };
 
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
@@ -177,6 +197,16 @@ esp_err_t basic_demo_settings_save(const basic_demo_settings_t *settings)
         { "search_brave_key", NULL, (char *)settings->search_brave_key, sizeof(settings->search_brave_key) },
         { "search_tavily_key", NULL, (char *)settings->search_tavily_key, sizeof(settings->search_tavily_key) },
         { "time_timezone", NULL, (char *)settings->time_timezone, sizeof(settings->time_timezone) },
+        { "tts_xfyun_app_id", NULL, (char *)settings->tts_xfyun_app_id, sizeof(settings->tts_xfyun_app_id) },
+        { "tts_xfyun_api_key", NULL, (char *)settings->tts_xfyun_api_key, sizeof(settings->tts_xfyun_api_key) },
+        { "tts_xfyun_api_secret", NULL, (char *)settings->tts_xfyun_api_secret, sizeof(settings->tts_xfyun_api_secret) },
+        { "tts_xfyun_voice_name", NULL, (char *)settings->tts_xfyun_voice_name, sizeof(settings->tts_xfyun_voice_name) },
+        { "tts_xfyun_audio_encoding", NULL, (char *)settings->tts_xfyun_audio_encoding, sizeof(settings->tts_xfyun_audio_encoding) },
+        { "tts_xfyun_audio_format", NULL, (char *)settings->tts_xfyun_audio_format, sizeof(settings->tts_xfyun_audio_format) },
+        { "tts_xfyun_text_encoding", NULL, (char *)settings->tts_xfyun_text_encoding, sizeof(settings->tts_xfyun_text_encoding) },
+        { "tts_xfyun_websocket_uri", NULL, (char *)settings->tts_xfyun_websocket_uri, sizeof(settings->tts_xfyun_websocket_uri) },
+        { "tts_xfyun_auth_host", NULL, (char *)settings->tts_xfyun_auth_host, sizeof(settings->tts_xfyun_auth_host) },
+        { "tts_timeout_ms", NULL, (char *)settings->tts_timeout_ms, sizeof(settings->tts_timeout_ms) },
     };
 
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {

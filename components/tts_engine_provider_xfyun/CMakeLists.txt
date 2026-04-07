@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "src/tts_engine_provider_xfyun.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        esp_netif
+        esp_timer
+        esp_websocket_client
+        freertos
+        json
+        mbedtls
+        tts_engine
+)

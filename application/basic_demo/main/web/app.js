@@ -19,6 +19,16 @@ const configFields = [
   "search_tavily_key",
   "lua_base_dir",
   "time_timezone",
+  "tts_xfyun_app_id",
+  "tts_xfyun_api_key",
+  "tts_xfyun_api_secret",
+  "tts_xfyun_voice_name",
+  "tts_xfyun_audio_encoding",
+  "tts_xfyun_audio_format",
+  "tts_xfyun_text_encoding",
+  "tts_xfyun_websocket_uri",
+  "tts_xfyun_auth_host",
+  "tts_timeout_ms",
 ];
 
 let currentPath = "/";

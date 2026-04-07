@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/cap_tts.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        claw_cap
+        json
+        tts_engine
+        tts_engine_provider_xfyun
+)

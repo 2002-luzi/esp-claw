@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "app_clawgent.c"
+        "basic_demo_board_audio.c"
         "main.c"
         "basic_demo_cli.c"
         "basic_demo_lua_modules.c"
@@ -21,6 +22,7 @@ idf_component_register(
         cap_mcp_server
         cap_skill
         cap_time
+        cap_tts
         cap_web_search
         claw_event_router
         claw_cap
@@ -31,11 +33,13 @@ idf_component_register(
         driver
         esp_event
         esp_http_server
+        esp_codec_dev
         esp_netif
         esp_wifi
         fatfs
         json
         nvs_flash
+        tts_engine
         wear_levelling
         lua_module_delay
         lua_module_event_publisher

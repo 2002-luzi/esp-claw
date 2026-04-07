@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "src/tts_engine.c"
+        "src/tts_engine_playback.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        freertos
+)

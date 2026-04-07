@@ -198,6 +198,16 @@ static esp_err_t settings_to_json(httpd_req_t *req)
     json_add_string(root, "search_brave_key", settings.search_brave_key);
     json_add_string(root, "search_tavily_key", settings.search_tavily_key);
     json_add_string(root, "time_timezone", settings.time_timezone);
+    json_add_string(root, "tts_xfyun_app_id", settings.tts_xfyun_app_id);
+    json_add_string(root, "tts_xfyun_api_key", settings.tts_xfyun_api_key);
+    json_add_string(root, "tts_xfyun_api_secret", settings.tts_xfyun_api_secret);
+    json_add_string(root, "tts_xfyun_voice_name", settings.tts_xfyun_voice_name);
+    json_add_string(root, "tts_xfyun_audio_encoding", settings.tts_xfyun_audio_encoding);
+    json_add_string(root, "tts_xfyun_audio_format", settings.tts_xfyun_audio_format);
+    json_add_string(root, "tts_xfyun_text_encoding", settings.tts_xfyun_text_encoding);
+    json_add_string(root, "tts_xfyun_websocket_uri", settings.tts_xfyun_websocket_uri);
+    json_add_string(root, "tts_xfyun_auth_host", settings.tts_xfyun_auth_host);
+    json_add_string(root, "tts_timeout_ms", settings.tts_timeout_ms);
 
     char *payload = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
@@ -329,6 +339,16 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     json_read_string(root, "search_brave_key", settings.search_brave_key, sizeof(settings.search_brave_key));
     json_read_string(root, "search_tavily_key", settings.search_tavily_key, sizeof(settings.search_tavily_key));
     json_read_string(root, "time_timezone", settings.time_timezone, sizeof(settings.time_timezone));
+    json_read_string(root, "tts_xfyun_app_id", settings.tts_xfyun_app_id, sizeof(settings.tts_xfyun_app_id));
+    json_read_string(root, "tts_xfyun_api_key", settings.tts_xfyun_api_key, sizeof(settings.tts_xfyun_api_key));
+    json_read_string(root, "tts_xfyun_api_secret", settings.tts_xfyun_api_secret, sizeof(settings.tts_xfyun_api_secret));
+    json_read_string(root, "tts_xfyun_voice_name", settings.tts_xfyun_voice_name, sizeof(settings.tts_xfyun_voice_name));
+    json_read_string(root, "tts_xfyun_audio_encoding", settings.tts_xfyun_audio_encoding, sizeof(settings.tts_xfyun_audio_encoding));
+    json_read_string(root, "tts_xfyun_audio_format", settings.tts_xfyun_audio_format, sizeof(settings.tts_xfyun_audio_format));
+    json_read_string(root, "tts_xfyun_text_encoding", settings.tts_xfyun_text_encoding, sizeof(settings.tts_xfyun_text_encoding));
+    json_read_string(root, "tts_xfyun_websocket_uri", settings.tts_xfyun_websocket_uri, sizeof(settings.tts_xfyun_websocket_uri));
+    json_read_string(root, "tts_xfyun_auth_host", settings.tts_xfyun_auth_host, sizeof(settings.tts_xfyun_auth_host));
+    json_read_string(root, "tts_timeout_ms", settings.tts_timeout_ms, sizeof(settings.tts_timeout_ms));
 
     cJSON_Delete(root);
 
