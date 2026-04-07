@@ -129,6 +129,6 @@ void app_main(void)
 
 #if BASIC_DEMO_ENABLE_MEM_LOG
     /* Start memory monitor: print internal free, min free, PSRAM free every 20s */
-    xTaskCreate(memory_monitor_task, "mem_mon", 8192, NULL, 1, NULL);
+    xTaskCreate(memory_monitor_task, "mem_mon", 4096, NULL, 1, NULL);
 #endif
 }

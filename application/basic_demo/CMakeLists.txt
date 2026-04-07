@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.16)
 
 set(EXTRA_COMPONENT_DIRS
             "../../components/managed_vendor"
-            "../../components/esp_codec_dev"
             "../../components/tts_engine"
             "../../components/tts_engine_provider_xfyun"
             "../../components/claw_modules"
