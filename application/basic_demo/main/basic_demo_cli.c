@@ -14,6 +14,7 @@
 #include "cmd_cap_mcp_server.h"
 #include "cmd_cap_im_qq.h"
 #include "cmd_cap_im_tg.h"
+#include "cmd_cap_tts.h"
 #include "cmd_cap_im_wechat.h"
 #include "cmd_cap_lua.h"
 #include "cmd_cap_skill.h"
@@ -695,6 +696,7 @@ esp_err_t basic_demo_cli_start(void)
     register_cap_mcp_server();
     register_cap_skill();
     register_cap_time();
+    register_cap_tts();
     register_cap_web_search();
     register_claw_event_router();
 
