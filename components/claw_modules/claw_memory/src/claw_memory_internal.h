@@ -76,6 +76,10 @@ void claw_memory_normalize_session_text(const char *src,
                                         char *dst,
                                         size_t dst_size,
                                         size_t max_chars);
+esp_err_t claw_memory_write_session_raw_record(FILE *file,
+                                               const char *json_text,
+                                               uint32_t *out_offset,
+                                               uint32_t *out_length);
 esp_err_t claw_memory_write_session_json_record(FILE *file,
                                                 const char *role,
                                                 const char *text,
