@@ -16,6 +16,17 @@
 
 #define CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES 20
 #define CLAW_MEMORY_DEFAULT_MAX_MESSAGE_CHARS    4096
+#define CLAW_MEMORY_DEFAULT_MAX_TOOL_ITERATIONS  10
+#define CLAW_MEMORY_MAX_TOOL_ITERATIONS          32
+#define CLAW_MEMORY_SESSION_RECENT_TOOL_TURNS    2
+#define CLAW_MEMORY_SESSION_UNFINISHED_TOOL_TURNS 1
+#define CLAW_MEMORY_SESSION_TOOL_RECORDS_PER_ROUND 2
+#define CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS      \
+    (CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES +  \
+     ((CLAW_MEMORY_SESSION_RECENT_TOOL_TURNS +   \
+       CLAW_MEMORY_SESSION_UNFINISHED_TOOL_TURNS) * \
+      CLAW_MEMORY_MAX_TOOL_ITERATIONS *          \
+      CLAW_MEMORY_SESSION_TOOL_RECORDS_PER_ROUND))
 #define CLAW_MEMORY_MAX_PATH                     192
 #define CLAW_MEMORY_MAX_SUMMARIES                3
 #define CLAW_MEMORY_MAX_LABEL_CHARS              8
@@ -33,9 +44,24 @@
 #define CLAW_MEMORY_USER_FILE                    "user.md"
 #define CLAW_MEMORY_AUTO_EXTRACT_MAX_ITEMS       3
 #define CLAW_MEMORY_SESSION_HEADER_MAGIC         0x31485343u /* CSH1 */
-#define CLAW_MEMORY_SESSION_HEADER_VERSION       2
-#define CLAW_MEMORY_SESSION_RAW_HEADER_SIZE      256
-#define CLAW_MEMORY_SESSION_HEADER_SIZE          345
+#define CLAW_MEMORY_SESSION_HEADER_VERSION       3
+#define CLAW_MEMORY_SESSION_RAW_HEADER_SIZE      2304
+#define CLAW_MEMORY_SESSION_HEADER_SIZE          \
+    ((((CLAW_MEMORY_SESSION_RAW_HEADER_SIZE + 2) / 3) * 4) + 1)
+
+typedef enum {
+    CLAW_MEMORY_RECORD_TYPE_UNKNOWN = 0,
+    CLAW_MEMORY_RECORD_TYPE_USER = 1,
+    CLAW_MEMORY_RECORD_TYPE_ASSISTANT_FINAL = 2,
+    CLAW_MEMORY_RECORD_TYPE_ASSISTANT_TOOL = 3,
+    CLAW_MEMORY_RECORD_TYPE_TOOL_RESULT = 4,
+} claw_memory_record_type_t;
+
+typedef enum {
+    CLAW_MEMORY_BACKEND_FORMAT_UNKNOWN = 0,
+    CLAW_MEMORY_BACKEND_FORMAT_OPENAI = 1,
+    CLAW_MEMORY_BACKEND_FORMAT_ANTHROPIC = 2,
+} claw_memory_backend_format_t;
 
 typedef struct {
     int initialized;
@@ -50,6 +76,8 @@ typedef struct {
     char user_path[CLAW_MEMORY_MAX_PATH];
     size_t max_session_messages;
     size_t max_message_chars;
+    uint32_t max_tool_iterations;
+    claw_memory_backend_format_t backend_format;
     uint32_t write_changes_since_compact;
     uint32_t next_memory_seq;
 } claw_memory_state_t;
@@ -72,6 +100,7 @@ void safe_copy(char *dst, size_t dst_size, const char *src);
 char *dup_printf(const char *fmt, ...);
 size_t claw_memory_text_buffer_size(size_t max_chars);
 char *claw_memory_session_path_dup(const char *session_id);
+claw_memory_backend_format_t claw_memory_backend_format_from_type(const char *backend_type);
 void claw_memory_normalize_session_text(const char *src,
                                         char *dst,
                                         size_t dst_size,

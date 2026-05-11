@@ -116,6 +116,20 @@ char *claw_memory_session_path_dup(const char *session_id)
                       hash);
 }
 
+claw_memory_backend_format_t claw_memory_backend_format_from_type(const char *backend_type)
+{
+    if (!backend_type || !backend_type[0]) {
+        return CLAW_MEMORY_BACKEND_FORMAT_UNKNOWN;
+    }
+    if (strcmp(backend_type, "openai_compatible") == 0) {
+        return CLAW_MEMORY_BACKEND_FORMAT_OPENAI;
+    }
+    if (strcmp(backend_type, "anthropic_compatible") == 0) {
+        return CLAW_MEMORY_BACKEND_FORMAT_ANTHROPIC;
+    }
+    return CLAW_MEMORY_BACKEND_FORMAT_UNKNOWN;
+}
+
 void claw_memory_normalize_session_text(const char *src,
                                         char *dst,
                                         size_t dst_size,

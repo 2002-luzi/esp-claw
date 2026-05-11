@@ -70,20 +70,28 @@ typedef struct {
     uint32_t length;
 } claw_memory_session_index_entry_t;
 
+#define CLAW_MEMORY_SESSION_HEADER_FIXED_BYTES \
+    ((sizeof(uint32_t) * 4) + \
+     (sizeof(claw_memory_session_index_entry_t) * CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS) + \
+     (sizeof(uint8_t) * CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS) + \
+     (sizeof(uint8_t) * CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS))
+
 typedef struct {
     uint32_t magic;
     uint32_t version;
     uint32_t max_slots;
     uint32_t total_records;
-    claw_memory_session_index_entry_t entries[CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES];
+    claw_memory_session_index_entry_t entries[CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS];
+    uint8_t record_types[CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS];
+    uint8_t backend_formats[CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS];
     uint8_t reserved[CLAW_MEMORY_SESSION_RAW_HEADER_SIZE -
-                     (sizeof(uint32_t) * 4) -
-                     (sizeof(claw_memory_session_index_entry_t) *
-                      CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES)];
+                     CLAW_MEMORY_SESSION_HEADER_FIXED_BYTES];
 } claw_memory_session_header_t;
 
 _Static_assert(sizeof(claw_memory_session_header_t) == CLAW_MEMORY_SESSION_RAW_HEADER_SIZE,
                "session history raw header size must remain fixed");
+_Static_assert(CLAW_MEMORY_SESSION_HEADER_FIXED_BYTES <= CLAW_MEMORY_SESSION_RAW_HEADER_SIZE,
+               "session history raw header must fit fixed metadata");
 _Static_assert(CLAW_MEMORY_SESSION_HEADER_SIZE ==
                (((CLAW_MEMORY_SESSION_RAW_HEADER_SIZE + 2) / 3) * 4) + 1,
                "session history file header must fit base64 header plus newline");
@@ -572,19 +580,43 @@ esp_err_t claw_memory_async_extract_ensure_started(const claw_core_request_t *re
 
 static size_t session_history_effective_max_slots(void)
 {
-    static bool clamp_logged = false;
-    size_t max_slots = s_memory.max_session_messages ? s_memory.max_session_messages :
+    static bool plain_clamp_logged = false;
+    static bool tool_clamp_logged = false;
+    size_t plain_slots = s_memory.max_session_messages ? s_memory.max_session_messages :
         CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES;
+    size_t tool_iterations = s_memory.max_tool_iterations ? s_memory.max_tool_iterations :
+        CLAW_MEMORY_DEFAULT_MAX_TOOL_ITERATIONS;
+    size_t tool_turn_slots;
+    size_t max_slots;
 
-    if (max_slots > CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES) {
-        if (!clamp_logged) {
+    if (plain_slots > CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES) {
+        if (!plain_clamp_logged) {
             ESP_LOGW(TAG,
-                     "Session history retention clamped from %u to %u indexed records",
-                     (unsigned)max_slots,
+                     "Session history plain retention clamped from %u to %u records",
+                     (unsigned)plain_slots,
                      (unsigned)CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES);
-            clamp_logged = true;
+            plain_clamp_logged = true;
         }
-        max_slots = CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES;
+        plain_slots = CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES;
+    }
+    if (tool_iterations > CLAW_MEMORY_MAX_TOOL_ITERATIONS) {
+        if (!tool_clamp_logged) {
+            ESP_LOGW(TAG,
+                     "Session history tool retention clamped from %u to %u iterations",
+                     (unsigned)tool_iterations,
+                     (unsigned)CLAW_MEMORY_MAX_TOOL_ITERATIONS);
+            tool_clamp_logged = true;
+        }
+        tool_iterations = CLAW_MEMORY_MAX_TOOL_ITERATIONS;
+    }
+
+    tool_turn_slots = (CLAW_MEMORY_SESSION_RECENT_TOOL_TURNS +
+                       CLAW_MEMORY_SESSION_UNFINISHED_TOOL_TURNS) *
+                      tool_iterations *
+                      CLAW_MEMORY_SESSION_TOOL_RECORDS_PER_ROUND;
+    max_slots = plain_slots + tool_turn_slots;
+    if (max_slots > CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS) {
+        max_slots = CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS;
     }
     if (max_slots == 0) {
         max_slots = 1;
@@ -601,8 +633,40 @@ static void session_history_header_init(claw_memory_session_header_t *header,
     header->max_slots = (uint32_t)max_slots;
 }
 
+static size_t session_history_retained_count(const claw_memory_session_header_t *header);
+static size_t session_history_retained_slot(const claw_memory_session_header_t *header,
+                                            size_t index);
+
+static bool session_history_record_type_valid(uint8_t record_type)
+{
+    switch ((claw_memory_record_type_t)record_type) {
+    case CLAW_MEMORY_RECORD_TYPE_USER:
+    case CLAW_MEMORY_RECORD_TYPE_ASSISTANT_FINAL:
+    case CLAW_MEMORY_RECORD_TYPE_ASSISTANT_TOOL:
+    case CLAW_MEMORY_RECORD_TYPE_TOOL_RESULT:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool session_history_backend_format_valid(uint8_t backend_format)
+{
+    switch ((claw_memory_backend_format_t)backend_format) {
+    case CLAW_MEMORY_BACKEND_FORMAT_UNKNOWN:
+    case CLAW_MEMORY_BACKEND_FORMAT_OPENAI:
+    case CLAW_MEMORY_BACKEND_FORMAT_ANTHROPIC:
+        return true;
+    default:
+        return false;
+    }
+}
+
 static bool session_history_header_valid(const claw_memory_session_header_t *header)
 {
+    size_t count;
+    size_t i;
+
     if (!header) {
         return false;
     }
@@ -617,11 +681,30 @@ static bool session_history_header_valid(const claw_memory_session_header_t *hea
         return false;
     }
     if (header->max_slots == 0 ||
-            header->max_slots > CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES) {
+            header->max_slots > CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS) {
         ESP_LOGW(TAG,
                  "Invalid session history max_slots %" PRIu32,
                  header->max_slots);
         return false;
+    }
+    count = session_history_retained_count(header);
+    for (i = 0; i < count; i++) {
+        size_t slot = session_history_retained_slot(header, i);
+
+        if (!session_history_record_type_valid(header->record_types[slot])) {
+            ESP_LOGW(TAG,
+                     "Invalid session history record_type slot=%u type=%u",
+                     (unsigned)slot,
+                     (unsigned)header->record_types[slot]);
+            return false;
+        }
+        if (!session_history_backend_format_valid(header->backend_formats[slot])) {
+            ESP_LOGW(TAG,
+                     "Invalid session history backend_format slot=%u format=%u",
+                     (unsigned)slot,
+                     (unsigned)header->backend_formats[slot]);
+            return false;
+        }
     }
     return true;
 }
@@ -1035,6 +1118,7 @@ static esp_err_t session_history_open_for_append(const char *path,
 
 static esp_err_t session_history_append_indexed_record(FILE *file,
                                                        claw_memory_session_header_t *header,
+                                                       claw_memory_record_type_t record_type,
                                                        const char *role,
                                                        const char *text)
 {
@@ -1043,7 +1127,8 @@ static esp_err_t session_history_append_indexed_record(FILE *file,
     uint32_t slot;
     esp_err_t err;
 
-    if (!file || !header || !role || !text || header->max_slots == 0) {
+    if (!file || !header || !role || !text || header->max_slots == 0 ||
+            !session_history_record_type_valid((uint8_t)record_type)) {
         return ESP_ERR_INVALID_ARG;
     }
     if (header->total_records == UINT32_MAX) {
@@ -1064,6 +1149,8 @@ static esp_err_t session_history_append_indexed_record(FILE *file,
     slot = header->total_records % header->max_slots;
     header->entries[slot].offset = offset;
     header->entries[slot].length = length;
+    header->record_types[slot] = (uint8_t)record_type;
+    header->backend_formats[slot] = (uint8_t)s_memory.backend_format;
     header->total_records++;
 
     return ESP_OK;
@@ -1101,9 +1188,17 @@ esp_err_t claw_memory_session_append(const char *session_id,
         return err;
     }
 
-    err = session_history_append_indexed_record(file, &header, "user", user_text);
+    err = session_history_append_indexed_record(file,
+                                                &header,
+                                                CLAW_MEMORY_RECORD_TYPE_USER,
+                                                "user",
+                                                user_text);
     if (err == ESP_OK) {
-        err = session_history_append_indexed_record(file, &header, "assistant", assistant_text);
+        err = session_history_append_indexed_record(file,
+                                                    &header,
+                                                    CLAW_MEMORY_RECORD_TYPE_ASSISTANT_FINAL,
+                                                    "assistant",
+                                                    assistant_text);
     }
     if (err == ESP_OK) {
         err = session_history_write_header(file, &header);

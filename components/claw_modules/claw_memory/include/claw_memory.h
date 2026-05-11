@@ -36,6 +36,7 @@ typedef struct {
     const char *memory_root_dir;
     size_t max_session_messages;
     size_t max_message_chars;
+    uint32_t max_tool_iterations;
     claw_memory_llm_config_t llm;
     bool enable_async_extract_stage_note;
 } claw_memory_config_t;
