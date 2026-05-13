@@ -85,6 +85,11 @@ esp_err_t claw_memory_append_session_turn_callback(const char *session_id,
                                                    const char *user_text,
                                                    const char *assistant_text,
                                                    void *user_ctx);
+esp_err_t claw_memory_flush_tool_round_callback(const char *session_id,
+                                                const char *user_text,
+                                                const char *assistant_tool_json,
+                                                const char *tool_results_json,
+                                                void *user_ctx);
 esp_err_t claw_memory_request_start_callback(const claw_core_request_t *request,
                                              void *user_ctx);
 esp_err_t claw_memory_request_mark_manual_write(uint32_t request_id);

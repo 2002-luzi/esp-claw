@@ -28,6 +28,8 @@ typedef enum {
 #define CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE (1U << 0)
 #define CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE (1U << 1)
 
+#define CLAW_CORE_CONTEXT_PROVIDER_FLAG_REQUEST_START_ONLY (1U << 0)
+
 typedef struct {
     uint32_t request_id;
     uint32_t flags;
@@ -46,6 +48,12 @@ typedef esp_err_t (*claw_core_append_session_turn_fn)(const char *session_id,
                                                       const char *user_text,
                                                       const char *assistant_text,
                                                       void *user_ctx);
+
+typedef esp_err_t (*claw_core_flush_tool_round_fn)(const char *session_id,
+                                                   const char *user_text,
+                                                   const char *assistant_tool_json,
+                                                   const char *tool_results_json,
+                                                   void *user_ctx);
 
 typedef esp_err_t (*claw_core_request_start_fn)(const claw_core_request_t *request,
                                                 void *user_ctx);
@@ -76,6 +84,7 @@ typedef struct {
     const char *name;
     claw_core_context_provider_collect_fn collect;
     void *user_ctx;
+    uint32_t flags;
 } claw_core_context_provider_t;
 
 typedef esp_err_t (*claw_core_call_cap_fn)(const char *cap_name,
@@ -100,6 +109,8 @@ typedef struct {
     const char *system_prompt;
     claw_core_append_session_turn_fn append_session_turn;
     void *append_session_turn_user_ctx;
+    claw_core_flush_tool_round_fn flush_tool_round;
+    void *flush_tool_round_user_ctx;
     claw_core_request_start_fn on_request_start;
     void *on_request_start_user_ctx;
     claw_core_stage_note_fn collect_stage_note;

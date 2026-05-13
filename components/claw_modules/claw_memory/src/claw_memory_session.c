@@ -1171,6 +1171,30 @@ static esp_err_t session_history_validate_json_array(const char *json)
     return ESP_OK;
 }
 
+static esp_err_t session_history_validate_raw_json(const char *json,
+                                                   bool require_array)
+{
+    cJSON *root = NULL;
+    esp_err_t err = ESP_OK;
+
+    if (!json) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    root = cJSON_ParseWithOpts(json, NULL, 1);
+    if (!root) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (require_array && !cJSON_IsArray(root)) {
+        err = ESP_ERR_INVALID_STATE;
+    } else if (!require_array && !cJSON_IsObject(root)) {
+        err = ESP_ERR_INVALID_STATE;
+    }
+
+    cJSON_Delete(root);
+    return err;
+}
+
 static esp_err_t claw_memory_session_load_json_alloc(const char *session_id, char **out_json)
 {
     char *path = NULL;
@@ -1367,20 +1391,78 @@ static esp_err_t session_history_append_indexed_record(FILE *file,
     return ESP_OK;
 }
 
-esp_err_t claw_memory_session_append(const char *session_id,
-                                     const char *user_text,
-                                     const char *assistant_text)
+static esp_err_t session_history_append_raw_indexed_record(FILE *file,
+                                                           claw_memory_session_header_t *header,
+                                                           claw_memory_record_type_t record_type,
+                                                           const char *json_text)
+{
+    uint32_t offset = 0;
+    uint32_t length = 0;
+    uint32_t slot;
+    esp_err_t err;
+
+    if (!file || !header || !json_text || header->max_slots == 0 ||
+            !session_history_record_type_valid((uint8_t)record_type)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (header->total_records == UINT32_MAX) {
+        ESP_LOGE(TAG, "session history total_records overflow");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        ESP_LOGE(TAG, "seek session history EOF failed");
+        return ESP_FAIL;
+    }
+
+    err = claw_memory_write_session_raw_record(file, json_text, &offset, &length);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "write raw session history record failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    slot = header->total_records % header->max_slots;
+    header->entries[slot].offset = offset;
+    header->entries[slot].length = length;
+    header->record_types[slot] = (uint8_t)record_type;
+    header->backend_formats[slot] = (uint8_t)s_memory.backend_format;
+    header->total_records++;
+
+    return ESP_OK;
+}
+
+static esp_err_t claw_memory_session_append_records(const char *session_id,
+                                                    const char *user_text,
+                                                    const char *assistant_final_text,
+                                                    const char *assistant_tool_json,
+                                                    const char *tool_results_json)
 {
     char *path = NULL;
     FILE *file = NULL;
     claw_memory_session_header_t *header = NULL;
     esp_err_t err = ESP_OK;
 
-    if (!session_id || !user_text || !assistant_text) {
+    if (!session_id || (!user_text && !assistant_final_text &&
+                        !assistant_tool_json && !tool_results_json)) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!s_memory.initialized) {
         return ESP_ERR_INVALID_STATE;
+    }
+    if ((assistant_tool_json && !tool_results_json) ||
+            (!assistant_tool_json && tool_results_json)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (assistant_tool_json) {
+        err = session_history_validate_raw_json(assistant_tool_json, false);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "invalid assistant tool-call session record");
+            return err;
+        }
+        err = session_history_validate_raw_json(tool_results_json, true);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "invalid tool-result session record");
+            return err;
+        }
     }
 
     header = calloc(1, sizeof(*header));
@@ -1402,32 +1484,60 @@ esp_err_t claw_memory_session_append(const char *session_id,
 
     err = session_history_open_for_append(path, &file, header);
     if (err != ESP_OK) {
-        free(path);
-        free(header);
-        return err;
+        goto cleanup;
     }
 
-    err = session_history_append_indexed_record(file,
-                                                header,
-                                                CLAW_MEMORY_RECORD_TYPE_USER,
-                                                "user",
-                                                user_text);
-    if (err == ESP_OK) {
+    if (user_text) {
+        err = session_history_append_indexed_record(file,
+                                                    header,
+                                                    CLAW_MEMORY_RECORD_TYPE_USER,
+                                                    "user",
+                                                    user_text);
+    }
+    if (err == ESP_OK && assistant_tool_json) {
+        err = session_history_append_raw_indexed_record(file,
+                                                        header,
+                                                        CLAW_MEMORY_RECORD_TYPE_ASSISTANT_TOOL,
+                                                        assistant_tool_json);
+    }
+    if (err == ESP_OK && tool_results_json) {
+        err = session_history_append_raw_indexed_record(file,
+                                                        header,
+                                                        CLAW_MEMORY_RECORD_TYPE_TOOL_RESULT,
+                                                        tool_results_json);
+    }
+    if (err == ESP_OK && assistant_final_text) {
         err = session_history_append_indexed_record(file,
                                                     header,
                                                     CLAW_MEMORY_RECORD_TYPE_ASSISTANT_FINAL,
                                                     "assistant",
-                                                    assistant_text);
+                                                    assistant_final_text);
     }
     if (err == ESP_OK) {
         err = session_history_write_header(file, header);
     }
+
+cleanup:
     if (file && session_history_close_file(file) != ESP_OK && err == ESP_OK) {
         err = ESP_FAIL;
     }
     free(path);
     free(header);
     return err;
+}
+
+esp_err_t claw_memory_session_append(const char *session_id,
+                                     const char *user_text,
+                                     const char *assistant_text)
+{
+    if (!session_id || !user_text || !assistant_text) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return claw_memory_session_append_records(session_id,
+                                              user_text,
+                                              assistant_text,
+                                              NULL,
+                                              NULL);
 }
 
 esp_err_t claw_memory_note_session_summary(const char *session_id,
@@ -1442,7 +1552,33 @@ esp_err_t claw_memory_append_session_turn_callback(const char *session_id,
                                                    void *user_ctx)
 {
     (void)user_ctx;
-    return claw_memory_session_append(session_id, user_text, assistant_text);
+
+    if (!session_id || !assistant_text) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return claw_memory_session_append_records(session_id,
+                                              user_text,
+                                              assistant_text,
+                                              NULL,
+                                              NULL);
+}
+
+esp_err_t claw_memory_flush_tool_round_callback(const char *session_id,
+                                                const char *user_text,
+                                                const char *assistant_tool_json,
+                                                const char *tool_results_json,
+                                                void *user_ctx)
+{
+    (void)user_ctx;
+
+    if (!session_id || !assistant_tool_json || !tool_results_json) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return claw_memory_session_append_records(session_id,
+                                              user_text,
+                                              NULL,
+                                              assistant_tool_json,
+                                              tool_results_json);
 }
 
 esp_err_t claw_memory_request_start_callback(const claw_core_request_t *request,
@@ -1515,4 +1651,5 @@ const claw_core_context_provider_t claw_memory_session_history_provider = {
     .name = "Session History",
     .collect = claw_memory_session_history_collect,
     .user_ctx = NULL,
+    .flags = CLAW_CORE_CONTEXT_PROVIDER_FLAG_REQUEST_START_ONLY,
 };

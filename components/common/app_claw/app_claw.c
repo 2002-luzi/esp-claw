@@ -268,10 +268,12 @@ esp_err_t app_claw_start(const app_claw_config_t *config,
     core_config.system_prompt = APP_SYSTEM_PROMPT;
 #if CONFIG_APP_CLAW_MEMORY_MODE_FULL
     core_config.append_session_turn = claw_memory_append_session_turn_callback;
+    core_config.flush_tool_round = claw_memory_flush_tool_round_callback;
     core_config.on_request_start = claw_memory_request_start_callback;
     core_config.collect_stage_note = claw_memory_stage_note_callback;
 #else
     core_config.append_session_turn = claw_memory_append_session_turn_callback;
+    core_config.flush_tool_round = claw_memory_flush_tool_round_callback;
 #endif
     core_config.call_cap = claw_cap_call_from_core;
     core_config.task_stack_size = 16 * 1024;
