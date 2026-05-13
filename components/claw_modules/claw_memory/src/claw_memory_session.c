@@ -88,6 +88,17 @@ typedef struct {
                      CLAW_MEMORY_SESSION_HEADER_FIXED_BYTES];
 } claw_memory_session_header_t;
 
+typedef struct {
+    size_t turn_starts[CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS];
+    uint8_t turn_completed[CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS];
+    uint8_t turn_load_full[CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS];
+} claw_memory_session_select_scratch_t;
+
+typedef struct {
+    claw_memory_session_header_t header;
+    uint8_t selected[CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS];
+} claw_memory_session_load_scratch_t;
+
 _Static_assert(sizeof(claw_memory_session_header_t) == CLAW_MEMORY_SESSION_RAW_HEADER_SIZE,
                "session history raw header size must remain fixed");
 _Static_assert(CLAW_MEMORY_SESSION_HEADER_FIXED_BYTES <= CLAW_MEMORY_SESSION_RAW_HEADER_SIZE,
@@ -824,88 +835,279 @@ static size_t session_history_record_object_len(const claw_memory_session_index_
     return entry->length - 1;
 }
 
-static esp_err_t session_history_measure_indexed(const claw_memory_session_header_t *header,
-                                                 size_t *out_count,
-                                                 size_t *out_json_size)
+static esp_err_t session_history_read_record_text(FILE *file,
+                                                  const claw_memory_session_index_entry_t *entry,
+                                                  char **out_text)
 {
-    size_t count;
-    size_t json_size = 3; /* '[' + ']' + trailing NUL */
-    size_t i;
+    char *text = NULL;
+    size_t object_len;
 
-    if (!header || !out_count || !out_json_size) {
+    if (!file || !entry || !out_text) {
         return ESP_ERR_INVALID_ARG;
     }
+    *out_text = NULL;
 
-    count = session_history_retained_count(header);
-    if (count == 0) {
-        return ESP_ERR_NOT_FOUND;
-    }
-    if (count > 1) {
-        json_size += count - 1;
-    }
-
-    for (i = 0; i < count; i++) {
-        size_t slot = session_history_retained_slot(header, i);
-        const claw_memory_session_index_entry_t *entry = &header->entries[slot];
-        size_t object_len = session_history_record_object_len(entry);
-
-        if (entry->offset < CLAW_MEMORY_SESSION_HEADER_SIZE || object_len == 0) {
-            ESP_LOGW(TAG,
-                     "Invalid session history entry slot=%u offset=%" PRIu32 " length=%" PRIu32,
-                     (unsigned)slot,
-                     entry->offset,
-                     entry->length);
-            return ESP_ERR_INVALID_STATE;
-        }
-        json_size += object_len;
+    object_len = session_history_record_object_len(entry);
+    if (entry->offset < CLAW_MEMORY_SESSION_HEADER_SIZE || object_len == 0) {
+        ESP_LOGW(TAG,
+                 "Invalid session history entry offset=%" PRIu32 " length=%" PRIu32,
+                 entry->offset,
+                 entry->length);
+        return ESP_ERR_INVALID_STATE;
     }
 
-    *out_count = count;
-    *out_json_size = json_size;
+    text = calloc(1, object_len + 1);
+    if (!text) {
+        return ESP_ERR_NO_MEM;
+    }
+    if (fseek(file, (long)entry->offset, SEEK_SET) != 0) {
+        ESP_LOGE(TAG, "seek session history record failed");
+        free(text);
+        return ESP_FAIL;
+    }
+    if (fread(text, 1, object_len, file) != object_len) {
+        ESP_LOGE(TAG, "read session history record failed");
+        free(text);
+        return ESP_FAIL;
+    }
+
+    *out_text = text;
     return ESP_OK;
 }
 
-static esp_err_t session_history_render_indexed_json(FILE *file,
-                                                     const claw_memory_session_header_t *header,
-                                                     size_t count,
-                                                     char *json,
-                                                     size_t json_size)
+static bool session_history_turn_has_final(const claw_memory_session_header_t *header,
+                                           const size_t *turn_starts,
+                                           size_t turn_index,
+                                           size_t turn_count,
+                                           size_t retained_count)
 {
-    char *cursor = json;
-    char *expected_end = json + json_size - 1;
+    size_t start = turn_starts[turn_index];
+    size_t end = (turn_index + 1 < turn_count) ?
+        turn_starts[turn_index + 1] : retained_count;
     size_t i;
 
-    if (!file || !header || !json || json_size < 3 || count == 0) {
+    for (i = start; i < end; i++) {
+        size_t slot = session_history_retained_slot(header, i);
+
+        if (header->record_types[slot] == CLAW_MEMORY_RECORD_TYPE_ASSISTANT_FINAL) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static esp_err_t session_history_select_records(const claw_memory_session_header_t *header,
+                                                uint8_t selected[CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS],
+                                                size_t *out_retained_count,
+                                                size_t *out_selected_count)
+{
+    claw_memory_session_select_scratch_t *scratch = NULL;
+    size_t retained_count;
+    size_t selected_count = 0;
+    size_t turn_count = 0;
+    size_t recent_completed = 0;
+    size_t i;
+    size_t t;
+    esp_err_t err = ESP_OK;
+
+    if (!header || !selected || !out_retained_count || !out_selected_count) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    *cursor++ = '[';
-    for (i = 0; i < count; i++) {
+    scratch = calloc(1, sizeof(*scratch));
+    if (!scratch) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    retained_count = session_history_retained_count(header);
+    *out_retained_count = retained_count;
+    *out_selected_count = 0;
+    memset(selected, 0, CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS);
+
+    if (retained_count == 0) {
+        err = ESP_ERR_NOT_FOUND;
+        goto cleanup;
+    }
+
+    for (i = 0; i < retained_count; i++) {
         size_t slot = session_history_retained_slot(header, i);
-        const claw_memory_session_index_entry_t *entry = &header->entries[slot];
-        size_t object_len = session_history_record_object_len(entry);
 
-        if (i > 0) {
-            *cursor++ = ',';
+        if (header->record_types[slot] == CLAW_MEMORY_RECORD_TYPE_USER) {
+            scratch->turn_starts[turn_count] = i;
+            turn_count++;
         }
-        if (fseek(file, (long)entry->offset, SEEK_SET) != 0) {
-            ESP_LOGE(TAG, "seek session history record failed");
-            return ESP_FAIL;
-        }
-        if (fread(cursor, 1, object_len, file) != object_len) {
-            ESP_LOGE(TAG, "read session history record failed");
-            return ESP_FAIL;
-        }
-        cursor += object_len;
     }
-    *cursor++ = ']';
-    *cursor = '\0';
+    if (turn_count == 0) {
+        err = ESP_ERR_NOT_FOUND;
+        goto cleanup;
+    }
 
-    if (cursor != expected_end) {
-        ESP_LOGE(TAG, "session history json size mismatch");
-        return ESP_FAIL;
+    for (t = 0; t < turn_count; t++) {
+        scratch->turn_completed[t] = session_history_turn_has_final(header,
+                                                                    scratch->turn_starts,
+                                                                    t,
+                                                                    turn_count,
+                                                                    retained_count);
     }
+
+    for (t = turn_count; t > 0; t--) {
+        size_t turn_index = t - 1;
+
+        if (scratch->turn_completed[turn_index] &&
+                recent_completed < CLAW_MEMORY_SESSION_RECENT_TOOL_TURNS) {
+            scratch->turn_load_full[turn_index] = 1;
+            recent_completed++;
+        }
+    }
+    if (!scratch->turn_completed[turn_count - 1]) {
+        scratch->turn_load_full[turn_count - 1] = 1;
+    }
+
+    for (t = 0; t < turn_count; t++) {
+        size_t start = scratch->turn_starts[t];
+        size_t end = (t + 1 < turn_count) ? scratch->turn_starts[t + 1] : retained_count;
+
+        for (i = start; i < end; i++) {
+            size_t slot = session_history_retained_slot(header, i);
+            claw_memory_record_type_t type = (claw_memory_record_type_t)header->record_types[slot];
+            bool keep = false;
+
+            if (scratch->turn_load_full[t]) {
+                keep = true;
+            } else if (scratch->turn_completed[t] &&
+                       (type == CLAW_MEMORY_RECORD_TYPE_USER ||
+                        type == CLAW_MEMORY_RECORD_TYPE_ASSISTANT_FINAL)) {
+                keep = true;
+            }
+
+            if (keep) {
+                selected[i] = 1;
+                selected_count++;
+            }
+        }
+    }
+
+    if (selected_count == 0) {
+        err = ESP_ERR_NOT_FOUND;
+        goto cleanup;
+    }
+
+    *out_selected_count = selected_count;
+
+cleanup:
+    free(scratch);
+    return err;
+}
+
+static esp_err_t session_history_append_loaded_record(cJSON *records,
+                                                      cJSON *record,
+                                                      bool expand_array)
+{
+    cJSON *item;
+
+    if (!records || !record) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (!expand_array || !cJSON_IsArray(record)) {
+        if (!cJSON_AddItemToArray(records, record)) {
+            cJSON_Delete(record);
+            return ESP_ERR_NO_MEM;
+        }
+        return ESP_OK;
+    }
+
+    cJSON_ArrayForEach(item, record) {
+        cJSON *duplicate = cJSON_Duplicate(item, true);
+
+        if (!duplicate) {
+            cJSON_Delete(record);
+            return ESP_ERR_NO_MEM;
+        }
+        if (!cJSON_AddItemToArray(records, duplicate)) {
+            cJSON_Delete(duplicate);
+            cJSON_Delete(record);
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    cJSON_Delete(record);
     return ESP_OK;
+}
+
+static esp_err_t session_history_load_selected_json(FILE *file,
+                                                    const claw_memory_session_header_t *header,
+                                                    const uint8_t selected[CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS],
+                                                    size_t retained_count,
+                                                    char **out_json)
+{
+    cJSON *records = NULL;
+    char *json = NULL;
+    size_t i;
+    esp_err_t err = ESP_OK;
+
+    if (!file || !header || !selected || !out_json || retained_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_json = NULL;
+
+    records = cJSON_CreateArray();
+    if (!records) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    for (i = 0; i < retained_count; i++) {
+        size_t slot;
+        const claw_memory_session_index_entry_t *entry;
+        claw_memory_record_type_t type;
+        char *record_text = NULL;
+        cJSON *record = NULL;
+
+        if (!selected[i]) {
+            continue;
+        }
+
+        slot = session_history_retained_slot(header, i);
+        entry = &header->entries[slot];
+        type = (claw_memory_record_type_t)header->record_types[slot];
+
+        err = session_history_read_record_text(file, entry, &record_text);
+        if (err != ESP_OK) {
+            goto cleanup;
+        }
+
+        record = cJSON_ParseWithOpts(record_text, NULL, 1);
+        free(record_text);
+        if (!record) {
+            err = ESP_ERR_INVALID_STATE;
+            goto cleanup;
+        }
+
+        err = session_history_append_loaded_record(records,
+                                                   record,
+                                                   type == CLAW_MEMORY_RECORD_TYPE_TOOL_RESULT);
+        if (err != ESP_OK) {
+            goto cleanup;
+        }
+    }
+
+    json = cJSON_PrintUnformatted(records);
+    if (!json) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    *out_json = json;
+    json = NULL;
+
+cleanup:
+    if (json) {
+        cJSON_free(json);
+    }
+    if (records) {
+        cJSON_Delete(records);
+    }
+    return err;
 }
 
 static esp_err_t session_history_close_file(FILE *file)
@@ -973,10 +1175,10 @@ static esp_err_t claw_memory_session_load_json_alloc(const char *session_id, cha
 {
     char *path = NULL;
     FILE *file = NULL;
-    claw_memory_session_header_t header;
+    claw_memory_session_load_scratch_t *scratch = NULL;
     char *json = NULL;
-    size_t count = 0;
-    size_t json_size = 0;
+    size_t retained_count = 0;
+    size_t selected_count = 0;
     esp_err_t err;
     bool reset_file = false;
     const char *reset_reason = NULL;
@@ -989,6 +1191,11 @@ static esp_err_t claw_memory_session_load_json_alloc(const char *session_id, cha
     }
 
     *out_json = NULL;
+    scratch = calloc(1, sizeof(*scratch));
+    if (!scratch) {
+        return ESP_ERR_NO_MEM;
+    }
+
     path = claw_memory_session_path_dup(session_id);
     if (!path) {
         ESP_LOGE(TAG, "allocate session history path failed");
@@ -1005,7 +1212,7 @@ static esp_err_t claw_memory_session_load_json_alloc(const char *session_id, cha
         goto cleanup;
     }
 
-    err = session_history_read_header(file, &header);
+    err = session_history_read_header(file, &scratch->header);
     if (err != ESP_OK) {
         reset_file = true;
         reset_reason = "invalid header";
@@ -1013,7 +1220,10 @@ static esp_err_t claw_memory_session_load_json_alloc(const char *session_id, cha
         goto cleanup;
     }
 
-    err = session_history_measure_indexed(&header, &count, &json_size);
+    err = session_history_select_records(&scratch->header,
+                                         scratch->selected,
+                                         &retained_count,
+                                         &selected_count);
     if (err == ESP_ERR_INVALID_STATE) {
         reset_file = true;
         reset_reason = "invalid index";
@@ -1023,15 +1233,16 @@ static esp_err_t claw_memory_session_load_json_alloc(const char *session_id, cha
     if (err != ESP_OK) {
         goto cleanup;
     }
-
-    json = calloc(1, json_size);
-    if (!json) {
-        ESP_LOGE(TAG, "allocate session history json failed");
-        err = ESP_ERR_NO_MEM;
+    if (selected_count == 0) {
+        err = ESP_ERR_NOT_FOUND;
         goto cleanup;
     }
 
-    err = session_history_render_indexed_json(file, &header, count, json, json_size);
+    err = session_history_load_selected_json(file,
+                                             &scratch->header,
+                                             scratch->selected,
+                                             retained_count,
+                                             &json);
     if (err != ESP_OK) {
         reset_file = true;
         reset_reason = "read indexed records failed";
@@ -1053,11 +1264,10 @@ cleanup:
     }
     if (reset_file && path) {
         FILE *reset_file_handle = NULL;
-        claw_memory_session_header_t reset_header;
         esp_err_t reset_err;
 
         ESP_LOGW(TAG, "Resetting session history %s: %s", path, reset_reason);
-        reset_err = session_history_recreate_file(path, &reset_file_handle, &reset_header);
+        reset_err = session_history_recreate_file(path, &reset_file_handle, &scratch->header);
         if (reset_err == ESP_OK) {
             reset_err = session_history_close_file(reset_file_handle);
         }
@@ -1069,6 +1279,7 @@ cleanup:
         }
     }
     free(path);
+    free(scratch);
     if (err != ESP_OK) {
         free(json);
         return err;
@@ -1162,7 +1373,7 @@ esp_err_t claw_memory_session_append(const char *session_id,
 {
     char *path = NULL;
     FILE *file = NULL;
-    claw_memory_session_header_t header;
+    claw_memory_session_header_t *header = NULL;
     esp_err_t err = ESP_OK;
 
     if (!session_id || !user_text || !assistant_text) {
@@ -1172,41 +1383,50 @@ esp_err_t claw_memory_session_append(const char *session_id,
         return ESP_ERR_INVALID_STATE;
     }
 
+    header = calloc(1, sizeof(*header));
+    if (!header) {
+        return ESP_ERR_NO_MEM;
+    }
+
     path = claw_memory_session_path_dup(session_id);
     if (!path) {
         ESP_LOGE(TAG, "allocate session history path failed");
+        free(header);
         return ESP_ERR_NO_MEM;
     }
     if (ensure_parent_dir(path) != ESP_OK) {
         free(path);
+        free(header);
         return ESP_FAIL;
     }
 
-    err = session_history_open_for_append(path, &file, &header);
+    err = session_history_open_for_append(path, &file, header);
     if (err != ESP_OK) {
         free(path);
+        free(header);
         return err;
     }
 
     err = session_history_append_indexed_record(file,
-                                                &header,
+                                                header,
                                                 CLAW_MEMORY_RECORD_TYPE_USER,
                                                 "user",
                                                 user_text);
     if (err == ESP_OK) {
         err = session_history_append_indexed_record(file,
-                                                    &header,
+                                                    header,
                                                     CLAW_MEMORY_RECORD_TYPE_ASSISTANT_FINAL,
                                                     "assistant",
                                                     assistant_text);
     }
     if (err == ESP_OK) {
-        err = session_history_write_header(file, &header);
+        err = session_history_write_header(file, header);
     }
     if (file && session_history_close_file(file) != ESP_OK && err == ESP_OK) {
         err = ESP_FAIL;
     }
     free(path);
+    free(header);
     return err;
 }
 
