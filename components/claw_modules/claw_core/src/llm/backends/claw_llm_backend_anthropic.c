@@ -174,7 +174,8 @@ static cJSON *anthropic_duplicate_supported_block(cJSON *block)
     if (strcmp(type_json->valuestring, "text") == 0 ||
             strcmp(type_json->valuestring, "tool_use") == 0 ||
             strcmp(type_json->valuestring, "tool_result") == 0 ||
-            strcmp(type_json->valuestring, "thinking") == 0) {
+            strcmp(type_json->valuestring, "thinking") == 0 ||
+            strcmp(type_json->valuestring, "redacted_thinking") == 0) {
         return cJSON_Duplicate(block, true);
     }
     return NULL;
@@ -493,6 +494,13 @@ static esp_err_t parse_chat_response(const char *body,
         cJSON_Delete(root);
         *out_error_message = dup_printf("LLM response missing content");
         return ESP_FAIL;
+    }
+
+    out_response->raw_content_json = cJSON_PrintUnformatted(content);
+    if (!out_response->raw_content_json) {
+        cJSON_Delete(root);
+        *out_error_message = dup_printf("Out of memory copying LLM raw content");
+        return ESP_ERR_NO_MEM;
     }
 
     cJSON_ArrayForEach(block, content) {

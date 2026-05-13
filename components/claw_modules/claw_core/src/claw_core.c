@@ -944,6 +944,20 @@ static esp_err_t append_assistant_tool_calls(cJSON *messages,
     }
 
     cJSON_AddStringToObject(assistant, "role", "assistant");
+    if (response->raw_content_json && response->raw_content_json[0]) {
+        cJSON *raw_content = cJSON_Parse(response->raw_content_json);
+
+        if (!raw_content || !cJSON_IsArray(raw_content)) {
+            cJSON_Delete(raw_content);
+            cJSON_Delete(assistant);
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        cJSON_AddItemToObject(assistant, "content", raw_content);
+        cJSON_AddItemToArray(messages, assistant);
+        return ESP_OK;
+    }
+
     if (response->text && response->text[0]) {
         cJSON_AddStringToObject(assistant, "content", response->text);
     } else {
