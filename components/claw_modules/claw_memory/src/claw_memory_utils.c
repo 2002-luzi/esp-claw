@@ -84,14 +84,6 @@ static void claw_memory_sanitize_session_id(const char *session_id, char *buf, s
     buf[off] = '\0';
 }
 
-size_t claw_memory_text_buffer_size(size_t max_chars)
-{
-    if (max_chars == 0 || max_chars > CLAW_MEMORY_DEFAULT_MAX_MESSAGE_CHARS) {
-        max_chars = CLAW_MEMORY_DEFAULT_MAX_MESSAGE_CHARS;
-    }
-    return (max_chars * 4) + 1;
-}
-
 char *claw_memory_session_path_dup(const char *session_id)
 {
     char safe_session_id[48];
@@ -128,104 +120,6 @@ claw_memory_backend_format_t claw_memory_backend_format_from_type(const char *ba
         return CLAW_MEMORY_BACKEND_FORMAT_ANTHROPIC;
     }
     return CLAW_MEMORY_BACKEND_FORMAT_UNKNOWN;
-}
-
-void claw_memory_normalize_session_text(const char *src,
-                                        char *dst,
-                                        size_t dst_size,
-                                        size_t max_chars)
-{
-    size_t off = 0;
-    size_t chars = 0;
-
-    if (!dst || dst_size == 0) {
-        return;
-    }
-    dst[0] = '\0';
-    if (!src) {
-        return;
-    }
-
-    while (*src && off + 1 < dst_size && chars < max_chars) {
-        const unsigned char *cur = (const unsigned char *)src;
-        size_t seq_len = utf8_sequence_len(*cur);
-
-        if (*cur < 0x80) {
-            char ch = (char)*cur++;
-
-            src = (const char *)cur;
-            dst[off++] = ch;
-            chars++;
-            continue;
-        }
-
-        if (seq_len == 0 || !utf8_sequence_valid(cur, seq_len) || off + seq_len >= dst_size) {
-            src++;
-            continue;
-        }
-        memcpy(dst + off, cur, seq_len);
-        off += seq_len;
-        src += seq_len;
-        chars++;
-    }
-    dst[off] = '\0';
-}
-
-esp_err_t claw_memory_write_session_json_record(FILE *file,
-                                                const char *role,
-                                                const char *text,
-                                                uint32_t *out_offset,
-                                                uint32_t *out_length)
-{
-    char *normalized = NULL;
-    cJSON *record = NULL;
-    char *record_text = NULL;
-    size_t max_chars = s_memory.max_message_chars;
-    size_t normalized_size;
-    esp_err_t err = ESP_OK;
-
-    if (!file || !role || !text || !out_offset || !out_length) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    *out_offset = 0;
-    *out_length = 0;
-
-    normalized_size = claw_memory_text_buffer_size(max_chars);
-    normalized = calloc(1, normalized_size);
-    if (!normalized) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    claw_memory_normalize_session_text(text, normalized, normalized_size, max_chars);
-
-    record = cJSON_CreateObject();
-    if (!record) {
-        err = ESP_ERR_NO_MEM;
-        goto cleanup;
-    }
-    if (!cJSON_AddStringToObject(record, "role", role) ||
-            !cJSON_AddStringToObject(record, "content", normalized)) {
-        err = ESP_ERR_NO_MEM;
-        goto cleanup;
-    }
-
-    record_text = cJSON_PrintUnformatted(record);
-    if (!record_text) {
-        err = ESP_ERR_NO_MEM;
-        goto cleanup;
-    }
-
-    err = claw_memory_write_session_raw_record(file, record_text, out_offset, out_length);
-
-cleanup:
-    if (record_text) {
-        cJSON_free(record_text);
-    }
-    if (record) {
-        cJSON_Delete(record);
-    }
-    free(normalized);
-    return err;
 }
 
 esp_err_t claw_memory_write_session_raw_record(FILE *file,

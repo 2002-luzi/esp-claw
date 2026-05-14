@@ -98,22 +98,12 @@ extern claw_memory_state_t s_memory;
 
 void safe_copy(char *dst, size_t dst_size, const char *src);
 char *dup_printf(const char *fmt, ...);
-size_t claw_memory_text_buffer_size(size_t max_chars);
 char *claw_memory_session_path_dup(const char *session_id);
 claw_memory_backend_format_t claw_memory_backend_format_from_type(const char *backend_type);
-void claw_memory_normalize_session_text(const char *src,
-                                        char *dst,
-                                        size_t dst_size,
-                                        size_t max_chars);
 esp_err_t claw_memory_write_session_raw_record(FILE *file,
                                                const char *json_text,
                                                uint32_t *out_offset,
                                                uint32_t *out_length);
-esp_err_t claw_memory_write_session_json_record(FILE *file,
-                                                const char *role,
-                                                const char *text,
-                                                uint32_t *out_offset,
-                                                uint32_t *out_length);
 bool line_list_contains_item(const char *list, const char *item);
 esp_err_t line_list_append_unique(char **list, const char *item);
 esp_err_t line_list_merge_unique(char **dst, const char *src);

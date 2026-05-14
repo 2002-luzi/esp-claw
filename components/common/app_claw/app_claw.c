@@ -283,6 +283,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config,
     core_config.request_queue_len = 4;
     core_config.response_queue_len = 4;
     core_config.max_context_providers = 8;
+    core_config.max_session_message_chars = 4096;
 
     if (!llm_enabled) {
         ESP_LOGW(TAG, "LLM is not fully configured. backend=%s base_url=%s model=%s. "

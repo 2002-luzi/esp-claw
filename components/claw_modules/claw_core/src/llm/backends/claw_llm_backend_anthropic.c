@@ -237,9 +237,11 @@ static cJSON *convert_messages_to_anthropic(cJSON *messages)
                 {
                     cJSON *tool_call_id = cJSON_GetObjectItem(inner, "tool_call_id");
                     cJSON *inner_content_json = cJSON_GetObjectItem(inner, "content");
+                    cJSON *is_error_json = cJSON_GetObjectItem(inner, "is_error");
                     const char *tid = cJSON_IsString(tool_call_id) ? tool_call_id->valuestring : NULL;
                     const char *content = cJSON_IsString(inner_content_json)
                                           ? inner_content_json->valuestring : "";
+                    bool is_error = cJSON_IsBool(is_error_json) && cJSON_IsTrue(is_error_json);
                     cJSON *block = cJSON_CreateObject();
 
                     if (!block) {
@@ -250,7 +252,7 @@ static cJSON *convert_messages_to_anthropic(cJSON *messages)
                     cJSON_AddStringToObject(block, "type", "tool_result");
                     cJSON_AddStringToObject(block, "tool_use_id", tid ? tid : "");
                     cJSON_AddStringToObject(block, "content", content);
-                    cJSON_AddBoolToObject(block, "is_error", false);
+                    cJSON_AddBoolToObject(block, "is_error", is_error);
                     cJSON_AddItemToArray(tool_blocks, block);
                 }
 
@@ -496,11 +498,26 @@ static esp_err_t parse_chat_response(const char *body,
         return ESP_FAIL;
     }
 
-    out_response->raw_content_json = cJSON_PrintUnformatted(content);
-    if (!out_response->raw_content_json) {
-        cJSON_Delete(root);
-        *out_error_message = dup_printf("Out of memory copying LLM raw content");
-        return ESP_ERR_NO_MEM;
+    {
+        cJSON *message = cJSON_CreateObject();
+        cJSON *content_copy = cJSON_Duplicate(content, true);
+
+        if (!message || !content_copy) {
+            cJSON_Delete(message);
+            cJSON_Delete(content_copy);
+            cJSON_Delete(root);
+            *out_error_message = dup_printf("Out of memory copying LLM raw message");
+            return ESP_ERR_NO_MEM;
+        }
+        cJSON_AddStringToObject(message, "role", "assistant");
+        cJSON_AddItemToObject(message, "content", content_copy);
+        out_response->raw_message_json = cJSON_PrintUnformatted(message);
+        cJSON_Delete(message);
+        if (!out_response->raw_message_json) {
+            cJSON_Delete(root);
+            *out_error_message = dup_printf("Out of memory copying LLM raw message");
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     cJSON_ArrayForEach(block, content) {

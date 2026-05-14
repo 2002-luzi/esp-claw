@@ -36,6 +36,7 @@ static const char *TAG = "claw_core";
 #define CLAW_CORE_DEFAULT_REQUEST_Q       4
 #define CLAW_CORE_DEFAULT_RESPONSE_Q      4
 #define CLAW_CORE_DEFAULT_TOOL_ITERATIONS 10
+#define CLAW_CORE_DEFAULT_SESSION_CHARS   4096
 #ifndef CLAW_CORE_LOG_SNIPPET_LEN
 #define CLAW_CORE_LOG_SNIPPET_LEN         96
 #endif
@@ -90,6 +91,7 @@ typedef struct {
     UBaseType_t task_priority;
     BaseType_t task_core;
     uint32_t max_tool_iterations;
+    size_t max_session_message_chars;
     QueueHandle_t request_queue;
     QueueHandle_t response_queue;
     TaskHandle_t task_handle;
@@ -261,6 +263,158 @@ static void obs_csv_append(char *csv, size_t csv_size, const char *name, bool de
     if (written < 0 || (size_t)written >= csv_size - cur) {
         csv[csv_size - 1] = '\0';
     }
+}
+
+static size_t claw_core_utf8_sequence_len(unsigned char ch)
+{
+    if (ch < 0x80) {
+        return 1;
+    }
+    if ((ch & 0xE0) == 0xC0) {
+        return 2;
+    }
+    if ((ch & 0xF0) == 0xE0) {
+        return 3;
+    }
+    if ((ch & 0xF8) == 0xF0) {
+        return 4;
+    }
+    return 0;
+}
+
+static bool claw_core_utf8_sequence_valid(const unsigned char *src, size_t len)
+{
+    size_t i;
+
+    if (!src || len == 0) {
+        return false;
+    }
+    for (i = 1; i < len; i++) {
+        if ((src[i] & 0xC0) != 0x80) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static size_t claw_core_session_text_buffer_size(size_t max_chars)
+{
+    if (max_chars == 0 || max_chars > CLAW_CORE_DEFAULT_SESSION_CHARS) {
+        max_chars = CLAW_CORE_DEFAULT_SESSION_CHARS;
+    }
+    return (max_chars * 4) + 1;
+}
+
+static void claw_core_normalize_session_text(const char *src,
+                                             char *dst,
+                                             size_t dst_size,
+                                             size_t max_chars)
+{
+    size_t off = 0;
+    size_t chars = 0;
+
+    if (!dst || dst_size == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (!src) {
+        return;
+    }
+    if (max_chars == 0 || max_chars > CLAW_CORE_DEFAULT_SESSION_CHARS) {
+        max_chars = CLAW_CORE_DEFAULT_SESSION_CHARS;
+    }
+
+    while (*src && off + 1 < dst_size && chars < max_chars) {
+        const unsigned char *cur = (const unsigned char *)src;
+        size_t seq_len = claw_core_utf8_sequence_len(*cur);
+
+        if (*cur < 0x80) {
+            dst[off++] = (char)*cur++;
+            src = (const char *)cur;
+            chars++;
+            continue;
+        }
+
+        if (seq_len == 0 || !claw_core_utf8_sequence_valid(cur, seq_len) ||
+                off + seq_len >= dst_size) {
+            src++;
+            continue;
+        }
+        memcpy(dst + off, cur, seq_len);
+        off += seq_len;
+        src += seq_len;
+        chars++;
+    }
+    dst[off] = '\0';
+}
+
+static esp_err_t claw_core_build_session_text_message_json(const char *role,
+                                                           const char *text,
+                                                           char **out_json)
+{
+    cJSON *message = NULL;
+    char *normalized = NULL;
+    char *json = NULL;
+    size_t normalized_size;
+    esp_err_t err = ESP_OK;
+
+    if (!role || !text || !out_json) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_json = NULL;
+
+    normalized_size = claw_core_session_text_buffer_size(s_core ?
+        s_core->max_session_message_chars : CLAW_CORE_DEFAULT_SESSION_CHARS);
+    normalized = calloc(1, normalized_size);
+    if (!normalized) {
+        return ESP_ERR_NO_MEM;
+    }
+    claw_core_normalize_session_text(text,
+                                     normalized,
+                                     normalized_size,
+                                     s_core ? s_core->max_session_message_chars :
+                                     CLAW_CORE_DEFAULT_SESSION_CHARS);
+
+    message = cJSON_CreateObject();
+    if (!message ||
+            !cJSON_AddStringToObject(message, "role", role) ||
+            !cJSON_AddStringToObject(message, "content", normalized)) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    json = cJSON_PrintUnformatted(message);
+    if (!json) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    *out_json = json;
+    json = NULL;
+
+cleanup:
+    if (json) {
+        cJSON_free(json);
+    }
+    cJSON_Delete(message);
+    free(normalized);
+    return err;
+}
+
+static esp_err_t claw_core_validate_assistant_message(cJSON *message)
+{
+    cJSON *role = NULL;
+
+    if (!message || !cJSON_IsObject(message)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    role = cJSON_GetObjectItem(message, "role");
+    if (!cJSON_IsString(role) || !role->valuestring ||
+            strcmp(role->valuestring, "assistant") != 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return ESP_OK;
 }
 
 static void log_tool_call_names(uint32_t request_id, const claw_core_llm_response_t *response)
@@ -931,71 +1085,19 @@ static esp_err_t append_assistant_tool_calls(cJSON *messages,
                                              const claw_core_llm_response_t *response)
 {
     cJSON *assistant = NULL;
-    cJSON *tool_calls = NULL;
-    size_t i;
 
     if (!messages || !response) {
         return ESP_ERR_INVALID_ARG;
     }
-
-    assistant = cJSON_CreateObject();
-    if (!assistant) {
-        return ESP_ERR_NO_MEM;
+    if (!response->raw_message_json || !response->raw_message_json[0]) {
+        return ESP_ERR_INVALID_STATE;
     }
 
-    cJSON_AddStringToObject(assistant, "role", "assistant");
-    if (response->raw_content_json && response->raw_content_json[0]) {
-        cJSON *raw_content = cJSON_Parse(response->raw_content_json);
-
-        if (!raw_content || !cJSON_IsArray(raw_content)) {
-            cJSON_Delete(raw_content);
-            cJSON_Delete(assistant);
-            return ESP_ERR_INVALID_STATE;
-        }
-
-        cJSON_AddItemToObject(assistant, "content", raw_content);
-        cJSON_AddItemToArray(messages, assistant);
-        return ESP_OK;
-    }
-
-    if (response->text && response->text[0]) {
-        cJSON_AddStringToObject(assistant, "content", response->text);
-    } else {
-        cJSON_AddNullToObject(assistant, "content");
-    }
-    if (response->reasoning_content) {
-        cJSON_AddStringToObject(assistant, "reasoning_content", response->reasoning_content);
-    } else {
-        cJSON_AddStringToObject(assistant, "reasoning_content", "");
-    }
-
-    tool_calls = cJSON_CreateArray();
-    if (!tool_calls) {
+    assistant = cJSON_ParseWithOpts(response->raw_message_json, NULL, 1);
+    if (claw_core_validate_assistant_message(assistant) != ESP_OK) {
         cJSON_Delete(assistant);
-        return ESP_ERR_NO_MEM;
+        return ESP_ERR_INVALID_STATE;
     }
-
-    for (i = 0; i < response->tool_call_count; i++) {
-        cJSON *tool_call = cJSON_CreateObject();
-        cJSON *function = cJSON_CreateObject();
-
-        if (!tool_call || !function) {
-            cJSON_Delete(tool_call);
-            cJSON_Delete(function);
-            cJSON_Delete(tool_calls);
-            cJSON_Delete(assistant);
-            return ESP_ERR_NO_MEM;
-        }
-
-        cJSON_AddStringToObject(tool_call, "id", response->tool_calls[i].id);
-        cJSON_AddStringToObject(tool_call, "type", "function");
-        cJSON_AddStringToObject(function, "name", response->tool_calls[i].name);
-        cJSON_AddStringToObject(function, "arguments", response->tool_calls[i].arguments_json);
-        cJSON_AddItemToObject(tool_call, "function", function);
-        cJSON_AddItemToArray(tool_calls, tool_call);
-    }
-
-    cJSON_AddItemToObject(assistant, "tool_calls", tool_calls);
     cJSON_AddItemToArray(messages, assistant);
     return ESP_OK;
 }
@@ -1036,21 +1138,32 @@ static char *claw_core_build_session_failure_trace(const char *error_message,
                       reason);
 }
 
-static esp_err_t append_tool_results_message(cJSON *runtime_messages,
-                                             const claw_core_llm_response_t *response,
-                                             const claw_core_request_t *request,
-                                             char *tool_summary,
-                                             size_t tool_summary_size)
+static esp_err_t append_tool_results_messages(cJSON *runtime_messages,
+                                              const claw_core_llm_response_t *response,
+                                              const claw_core_request_t *request,
+                                              char *tool_summary,
+                                              size_t tool_summary_size,
+                                              char **out_tool_results_json)
 {
+    cJSON *tool_results = NULL;
+    char *tool_results_json = NULL;
     size_t i;
+    esp_err_t ret = ESP_OK;
 
-    if (!runtime_messages || !response || !request) {
+    if (!runtime_messages || !response || !request || !out_tool_results_json) {
         return ESP_ERR_INVALID_ARG;
+    }
+    *out_tool_results_json = NULL;
+
+    tool_results = cJSON_CreateArray();
+    if (!tool_results) {
+        return ESP_ERR_NO_MEM;
     }
 
     for (i = 0; i < response->tool_call_count; i++) {
         char *tool_output = NULL;
         cJSON *tool_message = NULL;
+        cJSON *runtime_copy = NULL;
         esp_err_t err;
 
         ESP_LOGI(TAG, "tool_call request=%" PRIu32 " name=%s args=%.*s%s",
@@ -1068,7 +1181,8 @@ static esp_err_t append_tool_results_message(cJSON *runtime_messages,
             tool_output = dup_string(esp_err_to_name(err));
         }
         if (!tool_output) {
-            return ESP_ERR_NO_MEM;
+            ret = ESP_ERR_NO_MEM;
+            goto cleanup;
         }
 
         ESP_LOGI(TAG, "tool_result request=%" PRIu32 " name=%s err=%s output=%.*s%s",
@@ -1092,151 +1206,136 @@ static esp_err_t append_tool_results_message(cJSON *runtime_messages,
         tool_message = cJSON_CreateObject();
         if (!tool_message) {
             free(tool_output);
-            return ESP_ERR_NO_MEM;
+            ret = ESP_ERR_NO_MEM;
+            goto cleanup;
         }
 
         cJSON_AddStringToObject(tool_message, "role", "tool");
         cJSON_AddStringToObject(tool_message, "tool_call_id", response->tool_calls[i].id);
         cJSON_AddStringToObject(tool_message, "content", tool_output);
-        cJSON_AddItemToArray(runtime_messages, tool_message);
+        cJSON_AddBoolToObject(tool_message, "is_error", err != ESP_OK);
         free(tool_output);
-    }
 
-    return ESP_OK;
-}
-
-static esp_err_t print_runtime_message_json(cJSON *messages,
-                                            int index,
-                                            char **out_json)
-{
-    cJSON *message = NULL;
-    char *json = NULL;
-
-    if (!messages || index < 0 || !out_json) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    *out_json = NULL;
-
-    message = cJSON_GetArrayItem(messages, index);
-    if (!message) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    json = cJSON_PrintUnformatted(message);
-    if (!json) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    *out_json = json;
-    return ESP_OK;
-}
-
-static esp_err_t print_runtime_message_array_json(cJSON *messages,
-                                                  int start_index,
-                                                  int count,
-                                                  char **out_json)
-{
-    cJSON *array = NULL;
-    char *json = NULL;
-    int i;
-
-    if (!messages || start_index < 0 || count <= 0 || !out_json) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    *out_json = NULL;
-
-    array = cJSON_CreateArray();
-    if (!array) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    for (i = 0; i < count; i++) {
-        cJSON *message = cJSON_GetArrayItem(messages, start_index + i);
-        cJSON *copy = NULL;
-
-        if (!message) {
-            cJSON_Delete(array);
-            return ESP_ERR_INVALID_ARG;
+        runtime_copy = cJSON_Duplicate(tool_message, true);
+        if (!runtime_copy) {
+            cJSON_Delete(tool_message);
+            ret = ESP_ERR_NO_MEM;
+            goto cleanup;
         }
-
-        copy = cJSON_Duplicate(message, true);
-        if (!copy) {
-            cJSON_Delete(array);
-            return ESP_ERR_NO_MEM;
-        }
-        cJSON_AddItemToArray(array, copy);
+        cJSON_AddItemToArray(runtime_messages, runtime_copy);
+        cJSON_AddItemToArray(tool_results, tool_message);
     }
 
-    json = cJSON_PrintUnformatted(array);
-    cJSON_Delete(array);
-    if (!json) {
-        return ESP_ERR_NO_MEM;
+    tool_results_json = cJSON_PrintUnformatted(tool_results);
+    if (!tool_results_json) {
+        ret = ESP_ERR_NO_MEM;
+        goto cleanup;
     }
 
-    *out_json = json;
-    return ESP_OK;
+    *out_tool_results_json = tool_results_json;
+    tool_results_json = NULL;
+
+cleanup:
+    if (tool_results_json) {
+        cJSON_free(tool_results_json);
+    }
+    cJSON_Delete(tool_results);
+    return ret;
 }
 
 static esp_err_t flush_tool_round_if_configured(const claw_core_request_t *request,
-                                                cJSON *runtime_messages,
-                                                int assistant_index,
-                                                int first_tool_result_index,
-                                                int tool_result_count,
+                                                const char *assistant_tool_json,
+                                                const char *tool_results_json,
                                                 bool include_user)
 {
-    char *assistant_tool_json = NULL;
-    char *tool_results_json = NULL;
+    char *user_message_json = NULL;
     esp_err_t err;
 
     if (!s_core->flush_tool_round ||
             !request || !request->session_id || !request->session_id[0]) {
         return ESP_OK;
     }
-
-    err = print_runtime_message_json(runtime_messages, assistant_index, &assistant_tool_json);
-    if (err != ESP_OK) {
-        goto cleanup;
+    if (!assistant_tool_json || !tool_results_json) {
+        return ESP_ERR_INVALID_ARG;
     }
-
-    err = print_runtime_message_array_json(runtime_messages,
-                                           first_tool_result_index,
-                                           tool_result_count,
-                                           &tool_results_json);
-    if (err != ESP_OK) {
-        goto cleanup;
+    if (include_user) {
+        if (!request->user_text || !request->user_text[0]) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        err = claw_core_build_session_text_message_json("user",
+                                                        request->user_text,
+                                                        &user_message_json);
+        if (err != ESP_OK) {
+            return err;
+        }
     }
 
     err = s_core->flush_tool_round(request->session_id,
-                                   include_user ? request->user_text : NULL,
+                                   user_message_json,
                                    assistant_tool_json,
                                    tool_results_json,
                                    s_core->flush_tool_round_user_ctx);
-
-cleanup:
-    free(assistant_tool_json);
-    free(tool_results_json);
+    if (user_message_json) {
+        cJSON_free(user_message_json);
+    }
     return err;
 }
 
 static void append_session_turn_if_configured(const claw_core_request_t *request,
+                                              const char *assistant_message_json,
                                               const char *assistant_text,
                                               bool user_already_flushed,
                                               const char *operation)
 {
+    char *user_message_json = NULL;
+    char *fallback_assistant_json = NULL;
+    const char *assistant_json = assistant_message_json;
     esp_err_t append_err;
 
     if (!s_core->append_session_turn ||
             !request || !request->session_id || !request->session_id[0] ||
-            !assistant_text || !assistant_text[0]) {
+            ((!assistant_json || !assistant_json[0]) &&
+             (!assistant_text || !assistant_text[0]))) {
         return;
     }
     if (!user_already_flushed && (!request->user_text || !request->user_text[0])) {
         return;
     }
 
+    if (!user_already_flushed) {
+        append_err = claw_core_build_session_text_message_json("user",
+                                                               request->user_text,
+                                                               &user_message_json);
+        if (append_err != ESP_OK) {
+            ESP_LOGW(TAG,
+                     "%s skipped for request=%" PRIu32 ": build user JSON failed: %s",
+                     operation ? operation : "append_session_turn",
+                     request->request_id,
+                     esp_err_to_name(append_err));
+            return;
+        }
+    }
+    if (!assistant_json || !assistant_json[0]) {
+        append_err = claw_core_build_session_text_message_json("assistant",
+                                                               assistant_text,
+                                                               &fallback_assistant_json);
+        if (append_err != ESP_OK) {
+            ESP_LOGW(TAG,
+                     "%s skipped for request=%" PRIu32 ": build assistant JSON failed: %s",
+                     operation ? operation : "append_session_turn",
+                     request->request_id,
+                     esp_err_to_name(append_err));
+            if (user_message_json) {
+                cJSON_free(user_message_json);
+            }
+            return;
+        }
+        assistant_json = fallback_assistant_json;
+    }
+
     append_err = s_core->append_session_turn(request->session_id,
-                                             user_already_flushed ? NULL : request->user_text,
-                                             assistant_text,
+                                             user_message_json,
+                                             assistant_json,
                                              s_core->append_session_turn_user_ctx);
     if (append_err != ESP_OK) {
         ESP_LOGW(TAG,
@@ -1244,6 +1343,12 @@ static void append_session_turn_if_configured(const claw_core_request_t *request
                  operation ? operation : "append_session_turn",
                  request->request_id,
                  esp_err_to_name(append_err));
+    }
+    if (fallback_assistant_json) {
+        cJSON_free(fallback_assistant_json);
+    }
+    if (user_message_json) {
+        cJSON_free(user_message_json);
     }
 }
 
@@ -1617,7 +1722,8 @@ static void claw_core_task(void *arg)
                                false);
             }
 
-            int assistant_tool_index = cJSON_GetArraySize(runtime_messages);
+            char *tool_results_json = NULL;
+            const char *assistant_tool_json = llm_response.raw_message_json;
 
             err = append_assistant_tool_calls(runtime_messages, &llm_response);
             if (err != ESP_OK) {
@@ -1625,27 +1731,22 @@ static void claw_core_task(void *arg)
                 goto finish_request;
             }
 
-            int first_tool_result_index = cJSON_GetArraySize(runtime_messages);
-
-            err = append_tool_results_message(runtime_messages,
-                                              &llm_response,
-                                              &request.view,
-                                              tool_summary,
-                                              sizeof(tool_summary));
+            err = append_tool_results_messages(runtime_messages,
+                                               &llm_response,
+                                               &request.view,
+                                               tool_summary,
+                                               sizeof(tool_summary),
+                                               &tool_results_json);
             if (err != ESP_OK) {
                 response.view.error_message = dup_string(esp_err_to_name(err));
                 goto finish_request;
             }
 
-            int tool_result_count = cJSON_GetArraySize(runtime_messages) - first_tool_result_index;
-
-            if (tool_result_count > 0) {
+            if (tool_results_json && tool_results_json[0]) {
                 bool include_user = !session_user_flushed;
                 esp_err_t flush_err = flush_tool_round_if_configured(&request.view,
-                                                                     runtime_messages,
-                                                                     assistant_tool_index,
-                                                                     first_tool_result_index,
-                                                                     tool_result_count,
+                                                                     assistant_tool_json,
+                                                                     tool_results_json,
                                                                      include_user);
 
                 if (flush_err == ESP_OK) {
@@ -1662,6 +1763,9 @@ static void claw_core_task(void *arg)
                              esp_err_to_name(flush_err));
                 }
             }
+            if (tool_results_json) {
+                cJSON_free(tool_results_json);
+            }
 
             iteration++;
             if (iteration >= s_core->max_tool_iterations) {
@@ -1674,6 +1778,7 @@ static void claw_core_task(void *arg)
         if (err == ESP_OK && response.view.text) {
             response.view.status = CLAW_CORE_RESPONSE_STATUS_OK;
             append_session_turn_if_configured(&request.view,
+                                              llm_response.raw_message_json,
                                               response.view.text,
                                               session_user_flushed,
                                               "append_session_turn");
@@ -1723,6 +1828,7 @@ finish_request:
                              request.view.request_id);
                 } else {
                     append_session_turn_if_configured(&request.view,
+                                                      NULL,
                                                       failure_trace,
                                                       session_user_flushed,
                                                       "append_session_turn failed request note");
@@ -1793,6 +1899,9 @@ esp_err_t claw_core_init(const claw_core_config_t *config)
     s_core->task_core = config->task_core;
     s_core->max_tool_iterations = config->max_tool_iterations ?
                                  config->max_tool_iterations : CLAW_CORE_DEFAULT_TOOL_ITERATIONS;
+    s_core->max_session_message_chars = config->max_session_message_chars ?
+                                        config->max_session_message_chars :
+                                        CLAW_CORE_DEFAULT_SESSION_CHARS;
     s_core->context_provider_capacity = config->max_context_providers;
 
     if (s_core->context_provider_capacity > 0) {
