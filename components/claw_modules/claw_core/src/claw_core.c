@@ -1095,7 +1095,6 @@ static esp_err_t persist_session_batch_if_configured(const claw_core_request_t *
                                                      bool turn_completed)
 {
     claw_session_persist_batch_t batch = {0};
-    size_t i;
 
     if (!s_core->persist_session ||
             !request || !request->session_id || !request->session_id[0]) {
@@ -1103,13 +1102,6 @@ static esp_err_t persist_session_batch_if_configured(const claw_core_request_t *
     }
     if (!records || record_count == 0) {
         return ESP_ERR_INVALID_ARG;
-    }
-
-    for (i = 0; i < record_count; i++) {
-        if ((!records[i].message_json || !records[i].message_json[0]) &&
-                (!records[i].text || !records[i].text[0])) {
-            return ESP_ERR_INVALID_ARG;
-        }
     }
 
     batch.session_id = request->session_id;
@@ -1144,8 +1136,7 @@ static esp_err_t persist_session_tool_round_if_configured(const claw_core_reques
     claw_session_record_t records[3];
     size_t record_count = 0;
 
-    if (!s_core->persist_session ||
-            !request || !request->session_id || !request->session_id[0]) {
+    if (!request) {
         return ESP_OK;
     }
     if (!assistant_tool_message_json || !assistant_tool_message_json[0] ||
@@ -1180,8 +1171,7 @@ static esp_err_t persist_session_final_if_configured(const claw_core_request_t *
     claw_session_record_t records[2];
     size_t record_count = 0;
 
-    if (!s_core->persist_session ||
-            !request || !request->session_id || !request->session_id[0]) {
+    if (!request) {
         return ESP_OK;
     }
 

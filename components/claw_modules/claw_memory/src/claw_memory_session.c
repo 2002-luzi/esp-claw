@@ -951,15 +951,14 @@ static esp_err_t session_history_append_loaded_record(cJSON *records,
         return ESP_OK;
     }
 
-    cJSON_ArrayForEach(item, record) {
-        cJSON *duplicate = cJSON_Duplicate(item, true);
-
-        if (!duplicate) {
+    while (cJSON_GetArraySize(record) > 0) {
+        item = cJSON_DetachItemFromArray(record, 0);
+        if (!item) {
             cJSON_Delete(record);
-            return ESP_ERR_NO_MEM;
+            return ESP_ERR_INVALID_STATE;
         }
-        if (!cJSON_AddItemToArray(records, duplicate)) {
-            cJSON_Delete(duplicate);
+        if (!cJSON_AddItemToArray(records, item)) {
+            cJSON_Delete(item);
             cJSON_Delete(record);
             return ESP_ERR_NO_MEM;
         }
