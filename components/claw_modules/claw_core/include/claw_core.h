@@ -47,16 +47,23 @@ typedef struct {
 typedef esp_err_t (*claw_core_append_session_turn_fn)(const char *session_id,
                                                       const char *user_message_json,
                                                       const char *assistant_message_json,
+                                                      const claw_core_request_t *request,
                                                       void *user_ctx);
 
 typedef esp_err_t (*claw_core_flush_tool_round_fn)(const char *session_id,
                                                    const char *user_message_json,
                                                    const char *assistant_tool_json,
                                                    const char *tool_results_json,
+                                                   const claw_core_request_t *request,
                                                    void *user_ctx);
 
 typedef esp_err_t (*claw_core_request_start_fn)(const claw_core_request_t *request,
                                                 void *user_ctx);
+
+typedef esp_err_t (*claw_core_request_gate_fn)(const claw_core_request_t *request,
+                                               char *reject_message,
+                                               size_t reject_message_size,
+                                               void *user_ctx);
 
 typedef esp_err_t (*claw_core_stage_note_fn)(const claw_core_request_t *request,
                                              char **out_note,
@@ -111,6 +118,8 @@ typedef struct {
     void *append_session_turn_user_ctx;
     claw_core_flush_tool_round_fn flush_tool_round;
     void *flush_tool_round_user_ctx;
+    claw_core_request_gate_fn request_gate;
+    void *request_gate_user_ctx;
     claw_core_request_start_fn on_request_start;
     void *on_request_start_user_ctx;
     claw_core_stage_note_fn collect_stage_note;
@@ -124,7 +133,6 @@ typedef struct {
     uint32_t request_queue_len;
     uint32_t response_queue_len;
     size_t max_context_providers;
-    size_t max_session_message_chars;
 } claw_core_config_t;
 
 struct claw_core_response {
@@ -157,6 +165,7 @@ esp_err_t claw_core_call_cap(const char *cap_name,
                              const char *input_json,
                              const claw_core_request_t *request,
                              char **out_output);
+esp_err_t claw_core_publish_stage_text(const claw_core_request_t *request, const char *text);
 esp_err_t claw_core_submit(const claw_core_request_t *request, uint32_t timeout_ms);
 esp_err_t claw_core_cancel_request(uint32_t request_id);
 esp_err_t claw_core_receive(claw_core_response_t *response, uint32_t timeout_ms);

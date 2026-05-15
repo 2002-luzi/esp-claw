@@ -36,7 +36,6 @@ static const char *TAG = "claw_core";
 #define CLAW_CORE_DEFAULT_REQUEST_Q       4
 #define CLAW_CORE_DEFAULT_RESPONSE_Q      4
 #define CLAW_CORE_DEFAULT_TOOL_ITERATIONS 10
-#define CLAW_CORE_DEFAULT_SESSION_CHARS   4096
 #ifndef CLAW_CORE_LOG_SNIPPET_LEN
 #define CLAW_CORE_LOG_SNIPPET_LEN         96
 #endif
@@ -78,6 +77,8 @@ typedef struct {
     void *append_session_turn_user_ctx;
     claw_core_flush_tool_round_fn flush_tool_round;
     void *flush_tool_round_user_ctx;
+    claw_core_request_gate_fn request_gate;
+    void *request_gate_user_ctx;
     claw_core_request_start_fn on_request_start;
     void *on_request_start_user_ctx;
     claw_core_stage_note_fn collect_stage_note;
@@ -91,7 +92,6 @@ typedef struct {
     UBaseType_t task_priority;
     BaseType_t task_core;
     uint32_t max_tool_iterations;
-    size_t max_session_message_chars;
     QueueHandle_t request_queue;
     QueueHandle_t response_queue;
     TaskHandle_t task_handle;
@@ -297,21 +297,11 @@ static bool claw_core_utf8_sequence_valid(const unsigned char *src, size_t len)
     return true;
 }
 
-static size_t claw_core_session_text_buffer_size(size_t max_chars)
-{
-    if (max_chars == 0 || max_chars > CLAW_CORE_DEFAULT_SESSION_CHARS) {
-        max_chars = CLAW_CORE_DEFAULT_SESSION_CHARS;
-    }
-    return (max_chars * 4) + 1;
-}
-
 static void claw_core_normalize_session_text(const char *src,
                                              char *dst,
-                                             size_t dst_size,
-                                             size_t max_chars)
+                                             size_t dst_size)
 {
     size_t off = 0;
-    size_t chars = 0;
 
     if (!dst || dst_size == 0) {
         return;
@@ -320,18 +310,14 @@ static void claw_core_normalize_session_text(const char *src,
     if (!src) {
         return;
     }
-    if (max_chars == 0 || max_chars > CLAW_CORE_DEFAULT_SESSION_CHARS) {
-        max_chars = CLAW_CORE_DEFAULT_SESSION_CHARS;
-    }
 
-    while (*src && off + 1 < dst_size && chars < max_chars) {
+    while (*src && off + 1 < dst_size) {
         const unsigned char *cur = (const unsigned char *)src;
         size_t seq_len = claw_core_utf8_sequence_len(*cur);
 
         if (*cur < 0x80) {
             dst[off++] = (char)*cur++;
             src = (const char *)cur;
-            chars++;
             continue;
         }
 
@@ -343,7 +329,6 @@ static void claw_core_normalize_session_text(const char *src,
         memcpy(dst + off, cur, seq_len);
         off += seq_len;
         src += seq_len;
-        chars++;
     }
     dst[off] = '\0';
 }
@@ -363,17 +348,14 @@ static esp_err_t claw_core_build_session_text_message_json(const char *role,
     }
     *out_json = NULL;
 
-    normalized_size = claw_core_session_text_buffer_size(s_core ?
-        s_core->max_session_message_chars : CLAW_CORE_DEFAULT_SESSION_CHARS);
+    normalized_size = strlen(text) + 1;
     normalized = calloc(1, normalized_size);
     if (!normalized) {
         return ESP_ERR_NO_MEM;
     }
     claw_core_normalize_session_text(text,
                                      normalized,
-                                     normalized_size,
-                                     s_core ? s_core->max_session_message_chars :
-                                     CLAW_CORE_DEFAULT_SESSION_CHARS);
+                                     normalized_size);
 
     message = cJSON_CreateObject();
     if (!message ||
@@ -790,15 +772,15 @@ static void publish_out_message_if_requested(const claw_core_request_item_t *req
 
     free(payload_json);
 }
-#if CONFIG_CLAW_CORE_STAGE_VERBOSITY_VERBOSE
-static void publish_stage_event(const claw_core_request_t *request, const char *text)
+
+esp_err_t claw_core_publish_stage_text(const claw_core_request_t *request, const char *text)
 {
     claw_event_t event = {0};
     int64_t now_ms;
     esp_err_t err;
 
     if (!request || !text || !text[0]) {
-        return;
+        return ESP_ERR_INVALID_ARG;
     }
 
     now_ms = claw_core_now_ms();
@@ -814,7 +796,7 @@ static void publish_stage_event(const claw_core_request_t *request, const char *
         text,
         &event);
     if (err != ESP_OK) {
-        return;
+        return err;
     }
 
     esp_err_t pub_err = claw_event_router_publish(&event);
@@ -822,8 +804,8 @@ static void publish_stage_event(const claw_core_request_t *request, const char *
         ESP_LOGW(TAG, "request=%" PRIu32 " failed to publish stage event: %s",
                  request->request_id, esp_err_to_name(pub_err));
     }
+    return pub_err;
 }
-#endif
 
 static void publish_stage_tool_calls(const claw_core_request_t *request,
                                      const claw_core_llm_response_t *response,
@@ -863,7 +845,7 @@ static void publish_stage_tool_calls(const claw_core_request_t *request,
         off += (size_t)written;
     }
 
-    publish_stage_event(request, buf);
+    (void)claw_core_publish_stage_text(request, buf);
 #else
     (void)request;
     (void)response;
@@ -902,7 +884,7 @@ static void publish_stage_note_for_round(const claw_core_request_t *request,
         free(stage_note);
         return;
     }
-    publish_stage_event(request, buf);
+    (void)claw_core_publish_stage_text(request, buf);
 #else
     (void)request;
     (void)round_index;
@@ -1274,6 +1256,7 @@ static esp_err_t flush_tool_round_if_configured(const claw_core_request_t *reque
                                    user_message_json,
                                    assistant_tool_json,
                                    tool_results_json,
+                                   request,
                                    s_core->flush_tool_round_user_ctx);
     if (user_message_json) {
         cJSON_free(user_message_json);
@@ -1336,6 +1319,7 @@ static void append_session_turn_if_configured(const claw_core_request_t *request
     append_err = s_core->append_session_turn(request->session_id,
                                              user_message_json,
                                              assistant_json,
+                                             request,
                                              s_core->append_session_turn_user_ctx);
     if (append_err != ESP_OK) {
         ESP_LOGW(TAG,
@@ -1648,6 +1632,30 @@ static void claw_core_task(void *arg)
             response.view.error_message = dup_string("Failed to allocate response target");
             goto finish_request;
         }
+        if (s_core->request_gate) {
+            char reject_message[192] = {0};
+            esp_err_t gate_err = s_core->request_gate(&request.view,
+                                                      reject_message,
+                                                      sizeof(reject_message),
+                                                      s_core->request_gate_user_ctx);
+            if (gate_err != ESP_OK) {
+                if (reject_message[0]) {
+                    response.view.status = CLAW_CORE_RESPONSE_STATUS_OK;
+                    response.view.text = dup_string(reject_message);
+                    if (!response.view.text) {
+                        response.view.status = CLAW_CORE_RESPONSE_STATUS_ERROR;
+                        response.view.error_message = dup_string("Failed to allocate reject message");
+                        err = ESP_ERR_NO_MEM;
+                    } else {
+                        err = ESP_OK;
+                    }
+                } else {
+                    response.view.error_message = dup_string(esp_err_to_name(gate_err));
+                    err = gate_err;
+                }
+                goto finish_request;
+            }
+        }
         if (s_core->on_request_start) {
             err = s_core->on_request_start(&request.view, s_core->on_request_start_user_ctx);
             if (err != ESP_OK) {
@@ -1885,6 +1893,8 @@ esp_err_t claw_core_init(const claw_core_config_t *config)
     s_core->append_session_turn_user_ctx = config->append_session_turn_user_ctx;
     s_core->flush_tool_round = config->flush_tool_round;
     s_core->flush_tool_round_user_ctx = config->flush_tool_round_user_ctx;
+    s_core->request_gate = config->request_gate;
+    s_core->request_gate_user_ctx = config->request_gate_user_ctx;
     s_core->on_request_start = config->on_request_start;
     s_core->on_request_start_user_ctx = config->on_request_start_user_ctx;
     s_core->collect_stage_note = config->collect_stage_note;
@@ -1899,9 +1909,6 @@ esp_err_t claw_core_init(const claw_core_config_t *config)
     s_core->task_core = config->task_core;
     s_core->max_tool_iterations = config->max_tool_iterations ?
                                  config->max_tool_iterations : CLAW_CORE_DEFAULT_TOOL_ITERATIONS;
-    s_core->max_session_message_chars = config->max_session_message_chars ?
-                                        config->max_session_message_chars :
-                                        CLAW_CORE_DEFAULT_SESSION_CHARS;
     s_core->context_provider_capacity = config->max_context_providers;
 
     if (s_core->context_provider_capacity > 0) {

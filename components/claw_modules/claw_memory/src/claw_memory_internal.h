@@ -14,19 +14,8 @@
 #include "claw_memory.h"
 #include "llm/claw_llm_runtime.h"
 
-#define CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES 20
 #define CLAW_MEMORY_DEFAULT_MAX_MESSAGE_CHARS    4096
 #define CLAW_MEMORY_DEFAULT_MAX_TOOL_ITERATIONS  10
-#define CLAW_MEMORY_MAX_TOOL_ITERATIONS          32
-#define CLAW_MEMORY_SESSION_RECENT_TOOL_TURNS    2
-#define CLAW_MEMORY_SESSION_UNFINISHED_TOOL_TURNS 1
-#define CLAW_MEMORY_SESSION_TOOL_RECORDS_PER_ROUND 2
-#define CLAW_MEMORY_SESSION_MAX_INDEX_SLOTS      \
-    (CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES +  \
-     ((CLAW_MEMORY_SESSION_RECENT_TOOL_TURNS +   \
-       CLAW_MEMORY_SESSION_UNFINISHED_TOOL_TURNS) * \
-      CLAW_MEMORY_MAX_TOOL_ITERATIONS *          \
-      CLAW_MEMORY_SESSION_TOOL_RECORDS_PER_ROUND))
 #define CLAW_MEMORY_MAX_PATH                     192
 #define CLAW_MEMORY_MAX_SUMMARIES                3
 #define CLAW_MEMORY_MAX_LABEL_CHARS              8
@@ -34,6 +23,7 @@
 #define CLAW_MEMORY_MAX_ACTIVE_ITEMS             128
 #define CLAW_MEMORY_COMPACT_CHANGE_THRESHOLD     5
 #define CLAW_MEMORY_COMPACT_SIZE_THRESHOLD       (32 * 1024)
+#define CLAW_MEMORY_SESSION_SIZE_LIMIT           (100 * 1024)
 #define CLAW_MEMORY_RECALL_DEFAULT_LIMIT         8
 #define CLAW_MEMORY_RECORDS_FILE                 "memory_records.jsonl"
 #define CLAW_MEMORY_INDEX_FILE                   "memory_index.json"
@@ -43,12 +33,6 @@
 #define CLAW_MEMORY_IDENTITY_FILE                "identity.md"
 #define CLAW_MEMORY_USER_FILE                    "user.md"
 #define CLAW_MEMORY_AUTO_EXTRACT_MAX_ITEMS       3
-#define CLAW_MEMORY_SESSION_HEADER_MAGIC         0x31485343u /* CSH1 */
-#define CLAW_MEMORY_SESSION_HEADER_VERSION       3
-#define CLAW_MEMORY_SESSION_RAW_HEADER_SIZE      2304
-#define CLAW_MEMORY_SESSION_HEADER_SIZE          \
-    ((((CLAW_MEMORY_SESSION_RAW_HEADER_SIZE + 2) / 3) * 4) + 1)
-
 typedef enum {
     CLAW_MEMORY_RECORD_TYPE_UNKNOWN = 0,
     CLAW_MEMORY_RECORD_TYPE_USER = 1,
@@ -74,7 +58,6 @@ typedef struct {
     char soul_path[CLAW_MEMORY_MAX_PATH];
     char identity_path[CLAW_MEMORY_MAX_PATH];
     char user_path[CLAW_MEMORY_MAX_PATH];
-    size_t max_session_messages;
     size_t max_message_chars;
     uint32_t max_tool_iterations;
     claw_memory_backend_format_t backend_format;

@@ -100,7 +100,6 @@ static esp_err_t init_memory(const app_claw_config_t *config,
     claw_memory_config_t memory_config = {
         .session_root_dir = paths->memory_session_root,
         .memory_root_dir = paths->memory_root_dir,
-        .max_session_messages = 20,
         .max_message_chars = 4096,
         .max_tool_iterations = max_tool_iterations,
         .llm = {
@@ -269,11 +268,13 @@ esp_err_t app_claw_start(const app_claw_config_t *config,
 #if CONFIG_APP_CLAW_MEMORY_MODE_FULL
     core_config.append_session_turn = claw_memory_append_session_turn_callback;
     core_config.flush_tool_round = claw_memory_flush_tool_round_callback;
+    core_config.request_gate = claw_memory_request_gate_callback;
     core_config.on_request_start = claw_memory_request_start_callback;
     core_config.collect_stage_note = claw_memory_stage_note_callback;
 #else
     core_config.append_session_turn = claw_memory_append_session_turn_callback;
     core_config.flush_tool_round = claw_memory_flush_tool_round_callback;
+    core_config.request_gate = claw_memory_request_gate_callback;
 #endif
     core_config.call_cap = claw_cap_call_from_core;
     core_config.task_stack_size = 16 * 1024;
@@ -283,8 +284,6 @@ esp_err_t app_claw_start(const app_claw_config_t *config,
     core_config.request_queue_len = 4;
     core_config.response_queue_len = 4;
     core_config.max_context_providers = 8;
-    core_config.max_session_message_chars = 4096;
-
     if (!llm_enabled) {
         ESP_LOGW(TAG, "LLM is not fully configured. backend=%s base_url=%s model=%s. "
                       "The demo will start without claw_core; ask, auto-route-to-agent, and image analysis stay disabled until LLM API key, backend type, and model are set.",

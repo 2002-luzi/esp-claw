@@ -284,8 +284,6 @@ esp_err_t claw_memory_init(const claw_memory_config_t *config)
     safe_copy(s_memory.memory_root_dir,
               sizeof(s_memory.memory_root_dir),
               config->memory_root_dir);
-    s_memory.max_session_messages = config->max_session_messages ?
-        config->max_session_messages : CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES;
     s_memory.max_message_chars = config->max_message_chars ?
         config->max_message_chars : CLAW_MEMORY_DEFAULT_MAX_MESSAGE_CHARS;
     s_memory.max_tool_iterations = config->max_tool_iterations ?

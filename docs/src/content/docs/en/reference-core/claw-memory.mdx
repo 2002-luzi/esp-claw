@@ -16,11 +16,10 @@ Common fields in `claw_memory_config_t`:
 |------|------|------|
 | `session_root_dir` | Root for session history files | `/fatfs/sessions` |
 | `memory_root_dir` | Long-term memory directory (`claw_memory` manages `MEMORY.md` and all structured memory files under this directory) | `/fatfs/memory` |
-| `max_session_messages` | Max messages kept per session | `20` |
 | `max_message_chars` | Max characters per message | `1024` |
 | `enable_async_extract_stage_note` | Enable async extract-stage notes for structured memory | `true` in full mode |
 
-`max_session_messages` and `max_message_chars` together bound history size to avoid unbounded growth on flash and oversized history in prompts.
+Session history is stored as an append-only data file plus a matching `.idx` file. It loads the complete indexed session and compacts old tool details only when the data file exceeds the session size limit after a finalized assistant turn.
 
 ## Wiring into claw_core
 

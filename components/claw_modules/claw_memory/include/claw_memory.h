@@ -34,7 +34,6 @@ typedef struct {
 typedef struct {
     const char *session_root_dir;
     const char *memory_root_dir;
-    size_t max_session_messages;
     size_t max_message_chars;
     uint32_t max_tool_iterations;
     claw_memory_llm_config_t llm;
@@ -81,12 +80,18 @@ esp_err_t claw_memory_item_primary_summary_label(const claw_memory_item_t *item,
 esp_err_t claw_memory_append_session_turn_callback(const char *session_id,
                                                    const char *user_message_json,
                                                    const char *assistant_message_json,
+                                                   const claw_core_request_t *request,
                                                    void *user_ctx);
 esp_err_t claw_memory_flush_tool_round_callback(const char *session_id,
                                                 const char *user_message_json,
                                                 const char *assistant_tool_json,
                                                 const char *tool_results_json,
+                                                const claw_core_request_t *request,
                                                 void *user_ctx);
+esp_err_t claw_memory_request_gate_callback(const claw_core_request_t *request,
+                                            char *reject_message,
+                                            size_t reject_message_size,
+                                            void *user_ctx);
 esp_err_t claw_memory_request_start_callback(const claw_core_request_t *request,
                                              void *user_ctx);
 esp_err_t claw_memory_request_mark_manual_write(uint32_t request_id);
