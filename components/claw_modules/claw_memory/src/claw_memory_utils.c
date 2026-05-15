@@ -84,6 +84,14 @@ static void claw_memory_sanitize_session_id(const char *session_id, char *buf, s
     buf[off] = '\0';
 }
 
+size_t claw_memory_text_buffer_size(size_t max_chars)
+{
+    if (max_chars == 0 || max_chars > CLAW_MEMORY_DEFAULT_MAX_MESSAGE_CHARS) {
+        max_chars = CLAW_MEMORY_DEFAULT_MAX_MESSAGE_CHARS;
+    }
+    return (max_chars * 4) + 1;
+}
+
 char *claw_memory_session_path_dup(const char *session_id)
 {
     char safe_session_id[48];
@@ -106,6 +114,47 @@ char *claw_memory_session_path_dup(const char *session_id)
                       s_memory.session_root_dir,
                       safe_session_id[0] ? safe_session_id : "default",
                       hash);
+}
+
+void claw_memory_normalize_session_text(const char *src,
+                                        char *dst,
+                                        size_t dst_size,
+                                        size_t max_chars)
+{
+    size_t off = 0;
+    size_t chars = 0;
+
+    if (!dst || dst_size == 0) {
+        return;
+    }
+    dst[0] = '\0';
+    if (!src) {
+        return;
+    }
+
+    while (*src && off + 1 < dst_size && chars < max_chars) {
+        const unsigned char *cur = (const unsigned char *)src;
+        size_t seq_len = utf8_sequence_len(*cur);
+
+        if (*cur < 0x80) {
+            char ch = (char)*cur++;
+
+            src = (const char *)cur;
+            dst[off++] = ch;
+            chars++;
+            continue;
+        }
+
+        if (seq_len == 0 || !utf8_sequence_valid(cur, seq_len) || off + seq_len >= dst_size) {
+            src++;
+            continue;
+        }
+        memcpy(dst + off, cur, seq_len);
+        off += seq_len;
+        src += seq_len;
+        chars++;
+    }
+    dst[off] = '\0';
 }
 
 claw_memory_backend_format_t claw_memory_backend_format_from_type(const char *backend_type)

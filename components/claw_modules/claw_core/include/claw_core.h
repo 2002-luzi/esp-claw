@@ -45,13 +45,14 @@ typedef struct {
 } claw_core_request_t;
 
 typedef esp_err_t (*claw_core_append_session_turn_fn)(const char *session_id,
-                                                      const char *user_message_json,
+                                                      const char *user_text,
                                                       const char *assistant_message_json,
+                                                      const char *assistant_text,
                                                       const claw_core_request_t *request,
                                                       void *user_ctx);
 
 typedef esp_err_t (*claw_core_flush_tool_round_fn)(const char *session_id,
-                                                   const char *user_message_json,
+                                                   const char *user_text,
                                                    const char *assistant_tool_json,
                                                    const char *tool_results_json,
                                                    const claw_core_request_t *request,
