@@ -75,10 +75,10 @@ Capability 的解析与执行工作由 `claw_cap` 负责。
 
 ## 会话历史写入
 
-`claw_core` 通过回调机制支持多种会话历史写入方式。
+`claw_core` 通过 typed record batch 回调写入会话历史。
 
-`edge_agent` 中，`append_session_turn` 设为 `claw_memory_append_session_turn_callback`，该函数由 `claw_memory` 提供。
-`claw_core` 会在合适时机触发回调函数，将会话历史交由 `claw_memory` 处理。
+`edge_agent` 中，`persist_session` 设为 `claw_memory_persist_session_callback`，该函数由 `claw_memory` 提供。
+`claw_core` 会在普通轮次、中间工具轮、最终助手记录和失败说明等时机触发回调，将会话记录交由 `claw_memory` 处理。
 
 ## 请求取消
 

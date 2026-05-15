@@ -73,10 +73,8 @@ typedef struct {
     bool initialized;
     bool started;
     char *system_prompt;
-    claw_core_append_session_turn_fn append_session_turn;
-    void *append_session_turn_user_ctx;
-    claw_core_flush_tool_round_fn flush_tool_round;
-    void *flush_tool_round_user_ctx;
+    claw_core_persist_session_fn persist_session;
+    void *persist_session_user_ctx;
     claw_core_request_gate_fn request_gate;
     void *request_gate_user_ctx;
     claw_core_request_start_fn on_request_start;
@@ -1091,63 +1089,116 @@ cleanup:
     return ret;
 }
 
-static esp_err_t flush_tool_round_if_configured(const claw_core_request_t *request,
-                                                const char *assistant_tool_json,
-                                                const char *tool_results_json,
-                                                bool include_user)
+static esp_err_t persist_session_batch_if_configured(const claw_core_request_t *request,
+                                                     const claw_session_record_t *records,
+                                                     size_t record_count,
+                                                     bool turn_completed)
 {
-    if (!s_core->flush_tool_round ||
+    claw_session_persist_batch_t batch = {0};
+    size_t i;
+
+    if (!s_core->persist_session ||
             !request || !request->session_id || !request->session_id[0]) {
         return ESP_OK;
     }
-    if (!assistant_tool_json || !tool_results_json) {
+    if (!records || record_count == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (include_user) {
-        if (!request->user_text || !request->user_text[0]) {
+
+    for (i = 0; i < record_count; i++) {
+        if ((!records[i].message_json || !records[i].message_json[0]) &&
+                (!records[i].text || !records[i].text[0])) {
             return ESP_ERR_INVALID_ARG;
         }
     }
 
-    return s_core->flush_tool_round(request->session_id,
-                                    include_user ? request->user_text : NULL,
-                                    assistant_tool_json,
-                                    tool_results_json,
-                                    request,
-                                    s_core->flush_tool_round_user_ctx);
+    batch.session_id = request->session_id;
+    batch.request = request;
+    batch.records = records;
+    batch.record_count = record_count;
+    batch.turn_completed = turn_completed;
+
+    return s_core->persist_session(&batch, s_core->persist_session_user_ctx);
 }
 
-static void append_session_turn_if_configured(const claw_core_request_t *request,
-                                              const char *assistant_message_json,
-                                              const char *assistant_text,
-                                              bool user_already_flushed,
-                                              const char *operation)
+static void log_session_persist_failure(const claw_core_request_t *request,
+                                        const char *operation,
+                                        esp_err_t err)
 {
-    esp_err_t append_err;
-
-    if (!s_core->append_session_turn ||
-            !request || !request->session_id || !request->session_id[0] ||
-            ((!assistant_message_json || !assistant_message_json[0]) &&
-             (!assistant_text || !assistant_text[0]))) {
-        return;
-    }
-    if (!user_already_flushed && (!request->user_text || !request->user_text[0])) {
+    if (!request || err == ESP_OK) {
         return;
     }
 
-    append_err = s_core->append_session_turn(request->session_id,
-                                             user_already_flushed ? NULL : request->user_text,
-                                             assistant_message_json,
-                                             assistant_text,
-                                             request,
-                                             s_core->append_session_turn_user_ctx);
-    if (append_err != ESP_OK) {
-        ESP_LOGW(TAG,
-                 "%s failed for request=%" PRIu32 ": %s",
-                 operation ? operation : "append_session_turn",
-                 request->request_id,
-                 esp_err_to_name(append_err));
+    ESP_LOGW(TAG,
+             "%s failed for request=%" PRIu32 ": %s",
+             operation ? operation : "persist_session_records",
+             request->request_id,
+             esp_err_to_name(err));
+}
+
+static esp_err_t persist_session_tool_round_if_configured(const claw_core_request_t *request,
+                                                          const char *assistant_tool_message_json,
+                                                          const char *tool_results_json,
+                                                          bool include_user)
+{
+    claw_session_record_t records[3];
+    size_t record_count = 0;
+
+    if (!s_core->persist_session ||
+            !request || !request->session_id || !request->session_id[0]) {
+        return ESP_OK;
     }
+    if (!assistant_tool_message_json || !assistant_tool_message_json[0] ||
+            !tool_results_json || !tool_results_json[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (include_user) {
+        records[record_count++] = (claw_session_record_t) {
+            .type = CLAW_SESSION_RECORD_USER,
+            .text = request->user_text,
+        };
+    }
+
+    records[record_count++] = (claw_session_record_t) {
+        .type = CLAW_SESSION_RECORD_ASSISTANT_TOOL,
+        .message_json = assistant_tool_message_json,
+    };
+    records[record_count++] = (claw_session_record_t) {
+        .type = CLAW_SESSION_RECORD_TOOL_RESULT,
+        .message_json = tool_results_json,
+    };
+
+    return persist_session_batch_if_configured(request, records, record_count, false);
+}
+
+static esp_err_t persist_session_final_if_configured(const claw_core_request_t *request,
+                                                     const char *assistant_final_json,
+                                                     const char *assistant_text,
+                                                     bool user_already_flushed)
+{
+    claw_session_record_t records[2];
+    size_t record_count = 0;
+
+    if (!s_core->persist_session ||
+            !request || !request->session_id || !request->session_id[0]) {
+        return ESP_OK;
+    }
+
+    if (!user_already_flushed) {
+        records[record_count++] = (claw_session_record_t) {
+            .type = CLAW_SESSION_RECORD_USER,
+            .text = request->user_text,
+        };
+    }
+
+    records[record_count++] = (claw_session_record_t) {
+        .type = CLAW_SESSION_RECORD_ASSISTANT_FINAL,
+        .message_json = assistant_final_json,
+        .text = assistant_text,
+    };
+
+    return persist_session_batch_if_configured(request, records, record_count, true);
 }
 
 static esp_err_t apply_context_content(char **system_prompt,
@@ -1545,7 +1596,7 @@ static void claw_core_task(void *arg)
             }
 
             char *tool_results_json = NULL;
-            const char *assistant_tool_json = llm_response.raw_message_json;
+            const char *assistant_tool_message_json = llm_response.raw_message_json;
 
             err = append_assistant_tool_calls(runtime_messages, &llm_response);
             if (err != ESP_OK) {
@@ -1566,23 +1617,23 @@ static void claw_core_task(void *arg)
 
             if (tool_results_json && tool_results_json[0]) {
                 bool include_user = !session_user_flushed;
-                esp_err_t flush_err = flush_tool_round_if_configured(&request.view,
-                                                                     assistant_tool_json,
-                                                                     tool_results_json,
-                                                                     include_user);
+                esp_err_t persist_err = persist_session_tool_round_if_configured(&request.view,
+                                                                                 assistant_tool_message_json,
+                                                                                 tool_results_json,
+                                                                                 include_user);
 
-                if (flush_err == ESP_OK) {
-                    if (include_user && s_core->flush_tool_round &&
+                if (persist_err == ESP_OK) {
+                    if (include_user && s_core->persist_session &&
                             request.view.session_id && request.view.session_id[0]) {
                         session_user_flushed = true;
                     }
                 } else {
                     ESP_LOGW(TAG,
-                             "flush_tool_round failed for request=%" PRIu32
+                             "persist_session_tool_round failed for request=%" PRIu32
                              " iteration=%" PRIu32 ": %s",
                              request.view.request_id,
                              iteration,
-                             esp_err_to_name(flush_err));
+                             esp_err_to_name(persist_err));
                 }
             }
             if (tool_results_json) {
@@ -1598,12 +1649,16 @@ static void claw_core_task(void *arg)
         }
 
         if (err == ESP_OK && response.view.text) {
+            esp_err_t persist_err;
+
             response.view.status = CLAW_CORE_RESPONSE_STATUS_OK;
-            append_session_turn_if_configured(&request.view,
-                                              llm_response.raw_message_json,
-                                              response.view.text,
-                                              session_user_flushed,
-                                              "append_session_turn");
+            persist_err = persist_session_final_if_configured(&request.view,
+                                                              llm_response.raw_message_json,
+                                                              response.view.text,
+                                                              session_user_flushed);
+            log_session_persist_failure(&request.view,
+                                        "persist_session_final",
+                                        persist_err);
             if (s_core->completion_observer_count > 0) {
                 claw_core_completion_summary_t summary = {
                     .request_id = request.view.request_id,
@@ -1639,21 +1694,24 @@ finish_request:
             ESP_LOGE(TAG, "request=%" PRIu32 " failed: %s",
                      request.view.request_id,
                      response.view.error_message ? response.view.error_message : esp_err_to_name(err));
-            if (s_core->append_session_turn &&
+            if (s_core->persist_session &&
                     request.view.session_id && request.view.session_id[0] &&
                     request.view.user_text && request.view.user_text[0]) {
+                esp_err_t persist_err;
                 char *failure_trace = claw_core_build_session_failure_trace(response.view.error_message,
                                                                             tool_summary);
 
                 if (!failure_trace) {
-                    ESP_LOGW(TAG, "append_session_turn skipped for failed request=%" PRIu32 ": no memory",
+                    ESP_LOGW(TAG, "persist_session_failure skipped for failed request=%" PRIu32 ": no memory",
                              request.view.request_id);
                 } else {
-                    append_session_turn_if_configured(&request.view,
-                                                      NULL,
-                                                      failure_trace,
-                                                      session_user_flushed,
-                                                      "append_session_turn failed request note");
+                    persist_err = persist_session_final_if_configured(&request.view,
+                                                                      NULL,
+                                                                      failure_trace,
+                                                                      session_user_flushed);
+                    log_session_persist_failure(&request.view,
+                                                "persist_session_failure_note",
+                                                persist_err);
                     free(failure_trace);
                 }
             }
@@ -1703,10 +1761,8 @@ esp_err_t claw_core_init(const claw_core_config_t *config)
         claw_core_free_state_storage();
         return ESP_ERR_NO_MEM;
     }
-    s_core->append_session_turn = config->append_session_turn;
-    s_core->append_session_turn_user_ctx = config->append_session_turn_user_ctx;
-    s_core->flush_tool_round = config->flush_tool_round;
-    s_core->flush_tool_round_user_ctx = config->flush_tool_round_user_ctx;
+    s_core->persist_session = config->persist_session;
+    s_core->persist_session_user_ctx = config->persist_session_user_ctx;
     s_core->request_gate = config->request_gate;
     s_core->request_gate_user_ctx = config->request_gate_user_ctx;
     s_core->on_request_start = config->on_request_start;

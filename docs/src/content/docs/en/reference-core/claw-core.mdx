@@ -75,10 +75,10 @@ Per-turn tool rounds are capped by `max_tool_iterations`.
 
 ## Session history writes
 
-`claw_core` supports multiple ways to append session history via callbacks.
+`claw_core` writes session history through a typed record batch callback.
 
-In `edge_agent`, `append_session_turn` is `claw_memory_append_session_turn_callback` from `claw_memory`.
-`claw_core` invokes it at the right times so turns are persisted through `claw_memory`.
+In `edge_agent`, `persist_session` is `claw_memory_persist_session_callback` from `claw_memory`.
+`claw_core` invokes it for plain turns, intermediate tool rounds, final assistant records, and failure notes so session records are persisted through `claw_memory`.
 
 ## Request cancellation
 
