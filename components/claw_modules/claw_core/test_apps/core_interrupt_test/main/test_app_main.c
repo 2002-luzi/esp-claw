@@ -28,7 +28,7 @@ typedef enum {
 
 typedef struct {
     char session_id[32];
-    claw_session_record_type_t type;
+    claw_core_context_record_type_t type;
     char *text;
     char *message_json;
 } test_record_t;
@@ -49,7 +49,7 @@ static bool s_saw_in_llm_phase;
 static bool s_request_start_interrupt_enabled;
 static bool s_interrupt_provider_enabled;
 static bool s_interrupt_provider_done;
-static bool s_fail_user_persist;
+static bool s_fail_user_context_persist;
 static esp_err_t s_queue_full_err = ESP_OK;
 static uint32_t s_next_interrupt_request_id;
 
@@ -91,7 +91,7 @@ static void test_reset_scenario(test_backend_mode_t mode, uint32_t request_id)
     s_request_start_interrupt_enabled = false;
     s_interrupt_provider_enabled = false;
     s_interrupt_provider_done = false;
-    s_fail_user_persist = false;
+    s_fail_user_context_persist = false;
     s_queue_full_err = ESP_OK;
     s_next_interrupt_request_id = request_id + 10000;
 }
@@ -108,16 +108,16 @@ static esp_err_t submit_user_interrupt(const char *session_id, const char *text)
     return claw_core_submit(&request, 1000);
 }
 
-static esp_err_t test_persist_session(const claw_session_persist_batch_t *batch, void *user_ctx)
+static esp_err_t test_persist_context(const claw_core_context_persist_batch_t *batch, void *user_ctx)
 {
     (void)user_ctx;
 
     if (!batch || !batch->session_id || !batch->records) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_fail_user_persist) {
+    if (s_fail_user_context_persist) {
         for (size_t i = 0; i < batch->record_count; i++) {
-            if (batch->records[i].type == CLAW_SESSION_RECORD_USER) {
+            if (batch->records[i].type == CLAW_CORE_CONTEXT_RECORD_USER) {
                 return ESP_FAIL;
             }
         }
@@ -127,7 +127,7 @@ static esp_err_t test_persist_session(const claw_session_persist_batch_t *batch,
     }
 
     for (size_t i = 0; i < batch->record_count; i++) {
-        const claw_session_record_t *src = &batch->records[i];
+        const claw_core_context_record_t *src = &batch->records[i];
         test_record_t *dst = &s_records[s_record_count++];
 
         strlcpy(dst->session_id, batch->session_id, sizeof(dst->session_id));
@@ -165,7 +165,7 @@ static esp_err_t test_session_history_collect(const claw_core_request_t *request
         if (strcmp(record->session_id, request->session_id) != 0) {
             continue;
         }
-        if (record->type == CLAW_SESSION_RECORD_USER) {
+        if (record->type == CLAW_CORE_CONTEXT_RECORD_USER) {
             cJSON *msg = cJSON_CreateObject();
 
             if (!msg ||
@@ -176,7 +176,7 @@ static esp_err_t test_session_history_collect(const claw_core_request_t *request
                 return ESP_ERR_NO_MEM;
             }
             cJSON_AddItemToArray(messages, msg);
-        } else if (record->type == CLAW_SESSION_RECORD_ASSISTANT_FINAL) {
+        } else if (record->type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL) {
             cJSON *msg = cJSON_CreateObject();
 
             if (!msg ||
@@ -187,7 +187,7 @@ static esp_err_t test_session_history_collect(const claw_core_request_t *request
                 return ESP_ERR_NO_MEM;
             }
             cJSON_AddItemToArray(messages, msg);
-        } else if (record->type == CLAW_SESSION_RECORD_ASSISTANT_TOOL && record->message_json) {
+        } else if (record->type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_TOOL && record->message_json) {
             cJSON *msg = cJSON_Parse(record->message_json);
 
             if (!msg) {
@@ -195,7 +195,7 @@ static esp_err_t test_session_history_collect(const claw_core_request_t *request
                 return ESP_FAIL;
             }
             cJSON_AddItemToArray(messages, msg);
-        } else if (record->type == CLAW_SESSION_RECORD_TOOL_RESULT && record->message_json) {
+        } else if (record->type == CLAW_CORE_CONTEXT_RECORD_TOOL_RESULT && record->message_json) {
             cJSON *array = cJSON_Parse(record->message_json);
 
             if (!array || !cJSON_IsArray(array)) {
@@ -456,7 +456,7 @@ static void ensure_core_ready(void)
         .backend_type = "core_interrupt_test",
         .model = "test",
         .system_prompt = "system",
-        .persist_session = test_persist_session,
+        .persist_context = test_persist_context,
         .on_request_start = test_request_start,
         .call_cap = test_call_cap,
         .supports_tools = true,
@@ -510,7 +510,7 @@ static void submit_interrupt_flagged_and_expect_ok(uint32_t request_id, const ch
     claw_core_response_free(&response);
 }
 
-static size_t count_session_records(const char *session_id, claw_session_record_type_t type)
+static size_t count_session_context_records(const char *session_id, claw_core_context_record_type_t type)
 {
     size_t count = 0;
 
@@ -576,20 +576,20 @@ TEST_CASE("claw_core handles active user interrupts with FIFO restarts", "[claw_
     TEST_ASSERT_TRUE(s_saw_in_llm_phase);
     TEST_ASSERT_EQUAL(ESP_ERR_NO_MEM, s_queue_full_err);
     TEST_ASSERT_EQUAL(1, s_backend_call_count);
-    TEST_ASSERT_EQUAL(5, count_session_records("s-before-build", CLAW_SESSION_RECORD_USER));
-    TEST_ASSERT_EQUAL(1, count_session_records("s-before-build", CLAW_SESSION_RECORD_ASSISTANT_FINAL));
+    TEST_ASSERT_EQUAL(5, count_session_context_records("s-before-build", CLAW_CORE_CONTEXT_RECORD_USER));
+    TEST_ASSERT_EQUAL(1, count_session_context_records("s-before-build", CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL));
     assert_messages_contain_users(0, "A", "B", "C", "D", "E");
 
     test_reset_scenario(TEST_BACKEND_FINAL, 1006);
     s_request_start_interrupt_enabled = true;
-    s_fail_user_persist = true;
+    s_fail_user_context_persist = true;
     submit_and_expect_ok(1006, "s-persist-fail", "A0");
     TEST_ASSERT_TRUE(s_saw_before_build_phase);
     TEST_ASSERT_TRUE(s_saw_in_llm_phase);
     TEST_ASSERT_EQUAL(ESP_ERR_NO_MEM, s_queue_full_err);
     TEST_ASSERT_EQUAL(1, s_backend_call_count);
-    TEST_ASSERT_EQUAL(0, count_session_records("s-persist-fail", CLAW_SESSION_RECORD_USER));
-    TEST_ASSERT_EQUAL(1, count_session_records("s-persist-fail", CLAW_SESSION_RECORD_ASSISTANT_FINAL));
+    TEST_ASSERT_EQUAL(0, count_session_context_records("s-persist-fail", CLAW_CORE_CONTEXT_RECORD_USER));
+    TEST_ASSERT_EQUAL(1, count_session_context_records("s-persist-fail", CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL));
     assert_messages_contain_users(0, "A0", "B", "C", "D", "E");
 
     test_reset_scenario(TEST_BACKEND_FINAL, 1005);
@@ -599,33 +599,33 @@ TEST_CASE("claw_core handles active user interrupts with FIFO restarts", "[claw_
     TEST_ASSERT_TRUE(s_saw_in_llm_phase);
     TEST_ASSERT_EQUAL(ESP_ERR_NO_MEM, s_queue_full_err);
     TEST_ASSERT_EQUAL(1, s_backend_call_count);
-    TEST_ASSERT_EQUAL(5, count_session_records("s-before-http", CLAW_SESSION_RECORD_USER));
-    TEST_ASSERT_EQUAL(1, count_session_records("s-before-http", CLAW_SESSION_RECORD_ASSISTANT_FINAL));
+    TEST_ASSERT_EQUAL(5, count_session_context_records("s-before-http", CLAW_CORE_CONTEXT_RECORD_USER));
+    TEST_ASSERT_EQUAL(1, count_session_context_records("s-before-http", CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL));
     assert_messages_contain_users(0, "A1", "B", "C", "D", "E");
 
     test_reset_scenario(TEST_BACKEND_HTTP_ABORT, 1002);
     submit_and_expect_ok(1002, "s-http", "F");
     TEST_ASSERT_EQUAL(2, s_backend_call_count);
-    TEST_ASSERT_EQUAL(2, count_session_records("s-http", CLAW_SESSION_RECORD_USER));
-    TEST_ASSERT_EQUAL(1, count_session_records("s-http", CLAW_SESSION_RECORD_ASSISTANT_FINAL));
+    TEST_ASSERT_EQUAL(2, count_session_context_records("s-http", CLAW_CORE_CONTEXT_RECORD_USER));
+    TEST_ASSERT_EQUAL(1, count_session_context_records("s-http", CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL));
     assert_messages_contain_users(1, "F", "G", NULL, NULL, NULL);
 
     test_reset_scenario(TEST_BACKEND_AFTER_LLM_INTERRUPT, 1003);
     submit_and_expect_ok(1003, "s-after-llm", "A2");
     TEST_ASSERT_EQUAL(2, s_backend_call_count);
     TEST_ASSERT_EQUAL(0, s_tool_call_count);
-    TEST_ASSERT_EQUAL(2, count_session_records("s-after-llm", CLAW_SESSION_RECORD_USER));
-    TEST_ASSERT_EQUAL(0, count_session_records("s-after-llm", CLAW_SESSION_RECORD_ASSISTANT_TOOL));
-    TEST_ASSERT_EQUAL(0, count_session_records("s-after-llm", CLAW_SESSION_RECORD_TOOL_RESULT));
+    TEST_ASSERT_EQUAL(2, count_session_context_records("s-after-llm", CLAW_CORE_CONTEXT_RECORD_USER));
+    TEST_ASSERT_EQUAL(0, count_session_context_records("s-after-llm", CLAW_CORE_CONTEXT_RECORD_ASSISTANT_TOOL));
+    TEST_ASSERT_EQUAL(0, count_session_context_records("s-after-llm", CLAW_CORE_CONTEXT_RECORD_TOOL_RESULT));
     assert_messages_contain_users(1, "A2", "H", NULL, NULL, NULL);
 
     test_reset_scenario(TEST_BACKEND_TOOL_INTERRUPT, 1004);
     submit_and_expect_ok(1004, "s-tool", "A3");
     TEST_ASSERT_EQUAL(2, s_backend_call_count);
     TEST_ASSERT_EQUAL(1, s_tool_call_count);
-    TEST_ASSERT_EQUAL(2, count_session_records("s-tool", CLAW_SESSION_RECORD_USER));
-    TEST_ASSERT_EQUAL(1, count_session_records("s-tool", CLAW_SESSION_RECORD_ASSISTANT_TOOL));
-    TEST_ASSERT_EQUAL(1, count_session_records("s-tool", CLAW_SESSION_RECORD_TOOL_RESULT));
+    TEST_ASSERT_EQUAL(2, count_session_context_records("s-tool", CLAW_CORE_CONTEXT_RECORD_USER));
+    TEST_ASSERT_EQUAL(1, count_session_context_records("s-tool", CLAW_CORE_CONTEXT_RECORD_ASSISTANT_TOOL));
+    TEST_ASSERT_EQUAL(1, count_session_context_records("s-tool", CLAW_CORE_CONTEXT_RECORD_TOOL_RESULT));
     assert_messages_contain_users(1, "A3", "I", NULL, NULL, NULL);
 }
 
@@ -636,8 +636,8 @@ TEST_CASE("claw_core queues interrupt flagged requests without an insertable loo
     test_reset_scenario(TEST_BACKEND_FINAL, 1010);
     submit_interrupt_flagged_and_expect_ok(1010, "s-idle-fallback", "A4");
     TEST_ASSERT_EQUAL(1, s_backend_call_count);
-    TEST_ASSERT_EQUAL(1, count_session_records("s-idle-fallback", CLAW_SESSION_RECORD_USER));
-    TEST_ASSERT_EQUAL(1, count_session_records("s-idle-fallback", CLAW_SESSION_RECORD_ASSISTANT_FINAL));
+    TEST_ASSERT_EQUAL(1, count_session_context_records("s-idle-fallback", CLAW_CORE_CONTEXT_RECORD_USER));
+    TEST_ASSERT_EQUAL(1, count_session_context_records("s-idle-fallback", CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL));
     assert_messages_contain_users(0, "A4", NULL, NULL, NULL, NULL);
 }
 

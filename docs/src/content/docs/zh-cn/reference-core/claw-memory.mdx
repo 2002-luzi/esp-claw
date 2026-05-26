@@ -34,7 +34,7 @@ Session history 现在使用 append-only 数据文件和同名 `.idx` 索引文�
 
 **写回 Callback**：
 
-- `claw_memory_persist_session_callback`：作为 `claw_core_config_t.persist_session` 传入，将普通轮次、工具轮、最终助手记录和失败说明对应的 typed raw session records 追加写回 session 文件。
+- `claw_memory_persist_context_callback`：作为 `claw_core_config_t.persist_context` 传入，将普通轮次、工具轮、最终助手记录和失败说明对应的 typed raw context records 追加写回 session 文件。
 - 完整模式还会启用 `on_request_start` 与 `collect_stage_note`，用于结构化记忆自动抽取流程。
 
 ## 长期记忆文件布局

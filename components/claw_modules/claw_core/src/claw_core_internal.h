@@ -76,8 +76,8 @@ typedef struct {
     bool initialized;
     bool started;
     char *system_prompt;
-    claw_core_persist_session_fn persist_session;
-    void *persist_session_user_ctx;
+    claw_core_persist_context_fn persist_context;
+    void *persist_context_user_ctx;
     claw_core_request_gate_fn request_gate;
     void *request_gate_user_ctx;
     claw_core_request_start_fn on_request_start;
@@ -199,24 +199,24 @@ void claw_core_publish_stage_note_for_round(claw_core_state_t *core,
                                             const claw_core_request_t *request,
                                             uint32_t round_index);
 
-esp_err_t claw_core_persist_session_user_messages_if_configured(claw_core_state_t *core,
+esp_err_t claw_core_persist_context_user_messages_if_configured(claw_core_state_t *core,
                                                                 const claw_core_request_t *request,
                                                                 const char *const *texts,
                                                                 size_t text_count,
                                                                 bool *out_persisted);
-esp_err_t claw_core_persist_session_tool_round_if_configured(
+esp_err_t claw_core_persist_context_tool_round_if_configured(
     claw_core_state_t *core,
     const claw_core_request_t *request,
     const char *assistant_tool_message_json,
     const char *tool_results_json);
-esp_err_t claw_core_persist_session_final_if_configured(claw_core_state_t *core,
+esp_err_t claw_core_persist_context_final_if_configured(claw_core_state_t *core,
                                                         const claw_core_request_t *request,
                                                         const char *assistant_final_json,
                                                         const char *assistant_text);
-void claw_core_log_session_persist_failure(const claw_core_request_t *request,
+void claw_core_log_context_persist_failure(const claw_core_request_t *request,
                                            const char *operation,
                                            esp_err_t err);
-char *claw_core_build_session_failure_trace(const char *error_message,
+char *claw_core_build_context_failure_trace(const char *error_message,
                                             const char *tool_summary);
 
 void claw_core_agent_loop_task(void *arg);

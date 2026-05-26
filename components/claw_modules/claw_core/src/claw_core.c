@@ -95,8 +95,8 @@ esp_err_t claw_core_init(const claw_core_config_t *config)
         claw_core_free_state_storage();
         return ESP_ERR_NO_MEM;
     }
-    s_core->persist_session = config->persist_session;
-    s_core->persist_session_user_ctx = config->persist_session_user_ctx;
+    s_core->persist_context = config->persist_context;
+    s_core->persist_context_user_ctx = config->persist_context_user_ctx;
     s_core->request_gate = config->request_gate;
     s_core->request_gate_user_ctx = config->request_gate_user_ctx;
     s_core->on_request_start = config->on_request_start;

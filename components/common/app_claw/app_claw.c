@@ -301,12 +301,12 @@ esp_err_t app_claw_start(const app_claw_config_t *config,
     core_config.image_remote_url_only = app_claw_bool_is_true(config->llm_image_remote_url_only);
     core_config.system_prompt = APP_SYSTEM_PROMPT;
 #if CONFIG_APP_CLAW_MEMORY_MODE_FULL
-    core_config.persist_session = claw_memory_persist_session_callback;
+    core_config.persist_context = claw_memory_persist_context_callback;
     core_config.request_gate = claw_memory_request_gate_callback;
     core_config.on_request_start = claw_memory_request_start_callback;
     core_config.collect_stage_note = claw_memory_stage_note_callback;
 #else
-    core_config.persist_session = claw_memory_persist_session_callback;
+    core_config.persist_context = claw_memory_persist_context_callback;
     core_config.request_gate = claw_memory_request_gate_callback;
 #endif
     core_config.call_cap = claw_cap_call_from_core;

@@ -47,14 +47,14 @@ static esp_err_t handle_pending_user_interrupts(claw_core_state_t *core,
         persist_texts[i] = texts[i];
     }
 
-    err = claw_core_persist_session_user_messages_if_configured(core,
+    err = claw_core_persist_context_user_messages_if_configured(core,
                                                                 &request->view,
                                                                 persist_texts,
                                                                 text_count,
                                                                 &persisted);
     if (err != ESP_OK) {
-        claw_core_log_session_persist_failure(&request->view,
-                                              "persist_session_user_interrupt",
+        claw_core_log_context_persist_failure(&request->view,
+                                              "persist_context_user_interrupt",
                                               err);
         persisted = false;
     }
@@ -186,15 +186,15 @@ void claw_core_agent_loop_task(void *arg)
 
         {
             const char *user_texts[1] = {request.view.user_text};
-            esp_err_t persist_err = claw_core_persist_session_user_messages_if_configured(
+            esp_err_t persist_err = claw_core_persist_context_user_messages_if_configured(
                                         core,
                                         &request.view,
                                         user_texts,
                                         1,
                                         &original_user_persisted);
 
-            claw_core_log_session_persist_failure(&request.view,
-                                                  "persist_session_user",
+            claw_core_log_context_persist_failure(&request.view,
+                                                  "persist_context_user",
                                                   persist_err);
         }
 
@@ -367,7 +367,7 @@ void claw_core_agent_loop_task(void *arg)
             }
 
             if (tool_results_json && tool_results_json[0]) {
-                esp_err_t persist_err = claw_core_persist_session_tool_round_if_configured(
+                esp_err_t persist_err = claw_core_persist_context_tool_round_if_configured(
                                             core,
                                             &request.view,
                                             assistant_tool_message_json,
@@ -375,7 +375,7 @@ void claw_core_agent_loop_task(void *arg)
 
                 if (persist_err != ESP_OK) {
                     ESP_LOGW(TAG,
-                             "persist_session_tool_round failed for request=%" PRIu32
+                             "persist_context_tool_round failed for request=%" PRIu32
                              " iteration=%" PRIu32 ": %s",
                              request.view.request_id,
                              iteration,
@@ -398,12 +398,12 @@ void claw_core_agent_loop_task(void *arg)
             esp_err_t persist_err;
 
             response.view.status = CLAW_CORE_RESPONSE_STATUS_OK;
-            persist_err = claw_core_persist_session_final_if_configured(core,
+            persist_err = claw_core_persist_context_final_if_configured(core,
                                                                         &request.view,
                                                                         llm_response.raw_message_json,
                                                                         response.view.text);
-            claw_core_log_session_persist_failure(&request.view,
-                                                  "persist_session_final",
+            claw_core_log_context_persist_failure(&request.view,
+                                                  "persist_context_final",
                                                   persist_err);
             if (core->completion_observer_count > 0) {
                 claw_core_completion_summary_t summary = {
@@ -446,23 +446,23 @@ finish_request:
             ESP_LOGE(TAG, "request=%" PRIu32 " failed: %s",
                      request.view.request_id,
                      response.view.error_message ? response.view.error_message : esp_err_to_name(err));
-            if (core->persist_session &&
+            if (core->persist_context &&
                     request.view.session_id && request.view.session_id[0] &&
                     request.view.user_text && request.view.user_text[0]) {
                 esp_err_t persist_err;
-                char *failure_trace = claw_core_build_session_failure_trace(response.view.error_message,
+                char *failure_trace = claw_core_build_context_failure_trace(response.view.error_message,
                                                                             tool_summary);
 
                 if (!failure_trace) {
-                    ESP_LOGW(TAG, "persist_session_failure skipped for failed request=%" PRIu32 ": no memory",
+                    ESP_LOGW(TAG, "persist_context_failure skipped for failed request=%" PRIu32 ": no memory",
                              request.view.request_id);
                 } else {
-                    persist_err = claw_core_persist_session_final_if_configured(core,
+                    persist_err = claw_core_persist_context_final_if_configured(core,
                                                                                 &request.view,
                                                                                 NULL,
                                                                                 failure_trace);
-                    claw_core_log_session_persist_failure(&request.view,
-                                                          "persist_session_failure_note",
+                    claw_core_log_context_persist_failure(&request.view,
+                                                          "persist_context_failure_note",
                                                           persist_err);
                     free(failure_trace);
                 }

@@ -73,12 +73,12 @@ Capability 的解析与执行工作由 `claw_cap` 负责。
 
 一轮里允许的工具轮数由 `max_tool_iterations` 限制。
 
-## 会话历史写入
+## 上下文持久化
 
-`claw_core` 通过 typed record batch 回调写入会话历史。
+`claw_core` 通过 typed record batch 回调持久化可回放的上下文记录。
 
-`edge_agent` 中，`persist_session` 设为 `claw_memory_persist_session_callback`，该函数由 `claw_memory` 提供。
-`claw_core` 会在普通轮次、中间工具轮、最终助手记录和失败说明等时机触发回调，将会话记录交由 `claw_memory` 处理。
+`edge_agent` 中，`persist_context` 设为 `claw_memory_persist_context_callback`，该函数由 `claw_memory` 提供。
+`claw_core` 会在普通轮次、中间工具轮、最终助手记录和失败说明等时机触发回调，将按 `session_id` 分区的上下文记录交由 `claw_memory` 处理。
 
 ## 请求取消
 

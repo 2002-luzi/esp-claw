@@ -57,28 +57,28 @@ typedef struct {
 } claw_core_request_t;
 
 typedef enum {
-    CLAW_SESSION_RECORD_USER = 1,
-    CLAW_SESSION_RECORD_ASSISTANT_FINAL = 2,
-    CLAW_SESSION_RECORD_ASSISTANT_TOOL = 3,
-    CLAW_SESSION_RECORD_TOOL_RESULT = 4,
-} claw_session_record_type_t;
+    CLAW_CORE_CONTEXT_RECORD_USER = 1,
+    CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL = 2,
+    CLAW_CORE_CONTEXT_RECORD_ASSISTANT_TOOL = 3,
+    CLAW_CORE_CONTEXT_RECORD_TOOL_RESULT = 4,
+} claw_core_context_record_type_t;
 
 typedef struct {
-    claw_session_record_type_t type;
+    claw_core_context_record_type_t type;
     const char *message_json;
     const char *text;
-} claw_session_record_t;
+} claw_core_context_record_t;
 
 typedef struct {
     const char *session_id;
     const claw_core_request_t *request;
-    const claw_session_record_t *records;
+    const claw_core_context_record_t *records;
     size_t record_count;
     bool turn_completed;
-} claw_session_persist_batch_t;
+} claw_core_context_persist_batch_t;
 
-typedef esp_err_t (*claw_core_persist_session_fn)(
-    const claw_session_persist_batch_t *batch,
+typedef esp_err_t (*claw_core_persist_context_fn)(
+    const claw_core_context_persist_batch_t *batch,
     void *user_ctx);
 
 typedef esp_err_t (*claw_core_request_start_fn)(const claw_core_request_t *request,
@@ -138,8 +138,8 @@ typedef struct {
     bool supports_vision;
     bool image_remote_url_only;
     const char *system_prompt;
-    claw_core_persist_session_fn persist_session;
-    void *persist_session_user_ctx;
+    claw_core_persist_context_fn persist_context;
+    void *persist_context_user_ctx;
     claw_core_request_gate_fn request_gate;
     void *request_gate_user_ctx;
     claw_core_request_start_fn on_request_start;
