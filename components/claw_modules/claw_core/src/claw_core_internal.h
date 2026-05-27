@@ -72,9 +72,11 @@ typedef enum {
     CLAW_CORE_CONTROL_ABORT_REASON_USER_INTERRUPT,
 } claw_core_control_abort_reason_t;
 
-typedef struct {
+struct claw_core_state {
     bool initialized;
     bool started;
+    uint32_t instance_id;
+    char log_tag[32];
     char *system_prompt;
     claw_core_persist_context_fn persist_context;
     void *persist_context_user_ctx;
@@ -89,6 +91,7 @@ typedef struct {
     claw_core_context_provider_t *context_providers;
     size_t context_provider_count;
     size_t context_provider_capacity;
+    claw_llm_runtime_t *llm_runtime;
     uint32_t task_stack_size;
     UBaseType_t task_priority;
     BaseType_t task_core;
@@ -114,7 +117,9 @@ typedef struct {
         void *user_ctx;
     } completion_observers[CLAW_CORE_MAX_COMPLETION_OBSERVERS];
     size_t completion_observer_count;
-} claw_core_state_t;
+};
+
+typedef struct claw_core_state claw_core_state_t;
 
 char *claw_core_dup_string(const char *src);
 char *claw_core_dup_printf(const char *fmt, ...);

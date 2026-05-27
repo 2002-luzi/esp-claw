@@ -7,14 +7,13 @@
 #include "claw_task.h"
 
 #include <inttypes.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "esp_log.h"
 
 static const char *TAG = "claw_core";
-
-static claw_core_state_t *s_core = NULL;
 
 static void free_context_provider_storage(claw_core_state_t *core)
 {
@@ -34,117 +33,101 @@ static void free_context_provider_storage(claw_core_state_t *core)
     core->context_provider_capacity = 0;
 }
 
-static void claw_core_free_state_storage(void)
+static void claw_core_free_runtime(claw_core_state_t *core)
 {
-    free(s_core);
-    s_core = NULL;
-}
-
-static void claw_core_reset_runtime(void)
-{
-    if (!s_core) {
+    if (!core) {
         return;
     }
 
-    free_context_provider_storage(s_core);
-    free(s_core->system_prompt);
-    if (s_core->request_queue) {
-        vQueueDelete(s_core->request_queue);
+    free_context_provider_storage(core);
+    free(core->system_prompt);
+    claw_llm_runtime_deinit(core->llm_runtime);
+    if (core->request_queue) {
+        vQueueDelete(core->request_queue);
     }
-    if (s_core->response_queue) {
-        vQueueDelete(s_core->response_queue);
+    if (core->response_queue) {
+        vQueueDelete(core->response_queue);
     }
-    if (s_core->response_lock) {
-        vSemaphoreDelete(s_core->response_lock);
+    if (core->response_lock) {
+        vSemaphoreDelete(core->response_lock);
     }
-    if (s_core->inflight_lock) {
-        if (xSemaphoreTake(s_core->inflight_lock, portMAX_DELAY) == pdTRUE) {
-            claw_core_ingress_clear_insert_queue_locked(s_core);
-            xSemaphoreGive(s_core->inflight_lock);
+    if (core->inflight_lock) {
+        if (xSemaphoreTake(core->inflight_lock, portMAX_DELAY) == pdTRUE) {
+            claw_core_ingress_clear_insert_queue_locked(core);
+            xSemaphoreGive(core->inflight_lock);
         }
-        vSemaphoreDelete(s_core->inflight_lock);
+        vSemaphoreDelete(core->inflight_lock);
     }
-    memset(s_core, 0, sizeof(*s_core));
-    claw_core_free_state_storage();
+    memset(core, 0, sizeof(*core));
+    free(core);
 }
 
-esp_err_t claw_core_init(const claw_core_config_t *config)
+esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t *out_core)
 {
+    claw_core_state_t *core = NULL;
     claw_core_llm_config_t llm_config = {0};
     char *llm_error = NULL;
     esp_err_t err;
     uint32_t request_queue_len;
     uint32_t response_queue_len;
 
+    if (out_core) {
+        *out_core = NULL;
+    }
     if (!config || !config->system_prompt || !config->api_key || !config->model ||
-            !(config->backend_type && config->backend_type[0])) {
+            !(config->backend_type && config->backend_type[0]) || !out_core) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_core && s_core->initialized) {
-        return ESP_ERR_INVALID_STATE;
-    }
 
-    s_core = calloc(1, sizeof(*s_core));
-    if (!s_core) {
+    core = calloc(1, sizeof(*core));
+    if (!core) {
         return ESP_ERR_NO_MEM;
     }
     claw_core_check_timezone();
 
-    s_core->system_prompt = claw_core_dup_string(config->system_prompt);
-    if (!s_core->system_prompt) {
-        claw_core_free_state_storage();
+    core->instance_id = config->instance_id;
+    snprintf(core->log_tag, sizeof(core->log_tag), "claw_core_agent_%" PRIu32, core->instance_id);
+    core->system_prompt = claw_core_dup_string(config->system_prompt);
+    if (!core->system_prompt) {
+        claw_core_free_runtime(core);
         return ESP_ERR_NO_MEM;
     }
-    s_core->persist_context = config->persist_context;
-    s_core->persist_context_user_ctx = config->persist_context_user_ctx;
-    s_core->request_gate = config->request_gate;
-    s_core->request_gate_user_ctx = config->request_gate_user_ctx;
-    s_core->on_request_start = config->on_request_start;
-    s_core->on_request_start_user_ctx = config->on_request_start_user_ctx;
-    s_core->collect_stage_note = config->collect_stage_note;
-    s_core->collect_stage_note_user_ctx = config->collect_stage_note_user_ctx;
-    s_core->call_cap = config->call_cap;
-    s_core->cap_user_ctx = config->cap_user_ctx;
+    core->persist_context = config->persist_context;
+    core->persist_context_user_ctx = config->persist_context_user_ctx;
+    core->request_gate = config->request_gate;
+    core->request_gate_user_ctx = config->request_gate_user_ctx;
+    core->on_request_start = config->on_request_start;
+    core->on_request_start_user_ctx = config->on_request_start_user_ctx;
+    core->collect_stage_note = config->collect_stage_note;
+    core->collect_stage_note_user_ctx = config->collect_stage_note_user_ctx;
+    core->call_cap = config->call_cap;
+    core->cap_user_ctx = config->cap_user_ctx;
 
     request_queue_len = config->request_queue_len ? config->request_queue_len : CLAW_CORE_DEFAULT_REQUEST_Q;
     response_queue_len = config->response_queue_len ? config->response_queue_len : CLAW_CORE_DEFAULT_RESPONSE_Q;
-    s_core->task_stack_size = config->task_stack_size ? config->task_stack_size : CLAW_CORE_DEFAULT_STACK_SIZE;
-    s_core->task_priority = config->task_priority ? config->task_priority : CLAW_CORE_DEFAULT_PRIORITY;
-    s_core->task_core = config->task_core;
-    s_core->max_tool_iterations = config->max_tool_iterations ?
+    core->task_stack_size = config->task_stack_size ? config->task_stack_size : CLAW_CORE_DEFAULT_STACK_SIZE;
+    core->task_priority = config->task_priority ? config->task_priority : CLAW_CORE_DEFAULT_PRIORITY;
+    core->task_core = config->task_core;
+    core->max_tool_iterations = config->max_tool_iterations ?
                                   config->max_tool_iterations : CLAW_CORE_DEFAULT_TOOL_ITERATIONS;
-    s_core->context_provider_capacity = config->max_context_providers;
+    core->context_provider_capacity = config->max_context_providers;
 
-    if (s_core->context_provider_capacity > 0) {
-        s_core->context_providers = calloc(s_core->context_provider_capacity,
-                                           sizeof(claw_core_context_provider_t));
-        if (!s_core->context_providers) {
-            claw_core_reset_runtime();
+    if (core->context_provider_capacity > 0) {
+        core->context_providers = calloc(core->context_provider_capacity,
+                                         sizeof(claw_core_context_provider_t));
+        if (!core->context_providers) {
+            claw_core_free_runtime(core);
             return ESP_ERR_NO_MEM;
         }
     }
 
-    s_core->request_queue = xQueueCreate(request_queue_len, sizeof(claw_core_request_item_t));
-    s_core->response_queue = xQueueCreate(response_queue_len, sizeof(claw_core_response_item_t));
-    s_core->response_lock = xSemaphoreCreateMutex();
-    s_core->inflight_lock = xSemaphoreCreateMutex();
-    if (!s_core->request_queue || !s_core->response_queue ||
-            !s_core->response_lock || !s_core->inflight_lock) {
-        free_context_provider_storage(s_core);
-        free(s_core->system_prompt);
-        if (s_core->request_queue) {
-            vQueueDelete(s_core->request_queue);
-        }
-        if (s_core->response_queue) {
-            vQueueDelete(s_core->response_queue);
-        }
-        if (s_core->response_lock) {
-            vSemaphoreDelete(s_core->response_lock);
-        }
-        if (s_core->inflight_lock) {
-            vSemaphoreDelete(s_core->inflight_lock);
-        }
-        claw_core_free_state_storage();
+    core->request_queue = xQueueCreate(request_queue_len, sizeof(claw_core_request_item_t));
+    core->response_queue = xQueueCreate(response_queue_len, sizeof(claw_core_response_item_t));
+    core->response_lock = xSemaphoreCreateMutex();
+    core->inflight_lock = xSemaphoreCreateMutex();
+    if (!core->request_queue || !core->response_queue ||
+            !core->response_lock || !core->inflight_lock) {
+        claw_core_free_runtime(core);
         return ESP_ERR_NO_MEM;
     }
 
@@ -160,65 +143,81 @@ esp_err_t claw_core_init(const claw_core_config_t *config)
     llm_config.supports_tools = config->supports_tools;
     llm_config.supports_vision = config->supports_vision;
     llm_config.image_remote_url_only = config->image_remote_url_only;
-    err = claw_core_llm_init(&llm_config, &llm_error);
+    err = claw_core_llm_init(&llm_config, &core->llm_runtime, &llm_error);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "LLM init failed: %s", llm_error ? llm_error : esp_err_to_name(err));
         free(llm_error);
-        claw_core_reset_runtime();
+        claw_core_free_runtime(core);
         return err;
     }
 
-    s_core->initialized = true;
-    ESP_LOGI(TAG, "Initialized");
+    core->initialized = true;
+    *out_core = core;
+    ESP_LOGI(core->log_tag, "Initialized");
     return ESP_OK;
 }
 
-esp_err_t claw_core_start(void)
+esp_err_t claw_core_start(claw_core_handle_t core)
 {
     BaseType_t task_result;
 
-    if (!s_core || !s_core->initialized) {
+    if (!core || !core->initialized) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (s_core->started) {
+    if (core->started) {
         return ESP_OK;
     }
 
     task_result = claw_task_create(&(claw_task_config_t){
-                                        .name = "claw_core",
-                                        .stack_size = s_core->task_stack_size,
-                                        .priority = s_core->task_priority,
-                                        .core_id = s_core->task_core,
+                                        .name = core->log_tag,
+                                        .stack_size = core->task_stack_size,
+                                        .priority = core->task_priority,
+                                        .core_id = core->task_core,
                                         .stack_policy = CLAW_TASK_STACK_PREFER_PSRAM,
                                     },
                                     claw_core_agent_loop_task,
-                                    s_core,
-                                    &s_core->task_handle);
+                                    core,
+                                    &core->task_handle);
 
     if (task_result != pdPASS) {
         return ESP_FAIL;
     }
 
-    s_core->started = true;
-    ESP_LOGI(TAG, "Started worker task");
+    core->started = true;
+    ESP_LOGI(core->log_tag, "Started worker task");
     return ESP_OK;
 }
 
-esp_err_t claw_core_add_context_provider(const claw_core_context_provider_t *provider)
+esp_err_t claw_core_destroy(claw_core_handle_t core)
+{
+    if (!core || !core->initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (core->started) {
+        ESP_LOGE(core->log_tag, "Destroy rejected for started core");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    claw_core_free_runtime(core);
+    return ESP_OK;
+}
+
+esp_err_t claw_core_add_context_provider(claw_core_handle_t core,
+                                         const claw_core_context_provider_t *provider)
 {
     claw_core_context_provider_t *slot = NULL;
 
-    if (!s_core || !s_core->initialized || s_core->started) {
+    if (!core || !core->initialized || core->started) {
         return ESP_ERR_INVALID_STATE;
     }
     if (!provider || !provider->name || !provider->collect) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_core->context_provider_count >= s_core->context_provider_capacity) {
+    if (core->context_provider_count >= core->context_provider_capacity) {
         return ESP_ERR_NO_MEM;
     }
 
-    slot = &s_core->context_providers[s_core->context_provider_count];
+    slot = &core->context_providers[core->context_provider_count];
     slot->name = claw_core_dup_string(provider->name);
     if (!slot->name) {
         return ESP_ERR_NO_MEM;
@@ -226,67 +225,57 @@ esp_err_t claw_core_add_context_provider(const claw_core_context_provider_t *pro
     slot->collect = provider->collect;
     slot->user_ctx = provider->user_ctx;
     slot->flags = provider->flags;
-    s_core->context_provider_count++;
+    core->context_provider_count++;
     return ESP_OK;
 }
 
-esp_err_t claw_core_add_completion_observer(claw_core_completion_observer_fn observer,
+esp_err_t claw_core_add_completion_observer(claw_core_handle_t core,
+                                            claw_core_completion_observer_fn observer,
                                             void *user_ctx)
 {
-    if (!s_core || !s_core->initialized) {
+    if (!core || !core->initialized) {
         return ESP_ERR_INVALID_STATE;
     }
     if (!observer) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (s_core->completion_observer_count >= CLAW_CORE_MAX_COMPLETION_OBSERVERS) {
+    if (core->completion_observer_count >= CLAW_CORE_MAX_COMPLETION_OBSERVERS) {
         return ESP_ERR_NO_MEM;
     }
-    s_core->completion_observers[s_core->completion_observer_count].fn = observer;
-    s_core->completion_observers[s_core->completion_observer_count].user_ctx = user_ctx;
-    s_core->completion_observer_count++;
+    core->completion_observers[core->completion_observer_count].fn = observer;
+    core->completion_observers[core->completion_observer_count].user_ctx = user_ctx;
+    core->completion_observer_count++;
     return ESP_OK;
 }
 
-esp_err_t claw_core_call_cap(const char *cap_name,
-                             const char *input_json,
-                             const claw_core_request_t *request,
-                             char **out_output)
+esp_err_t claw_core_cancel_request(claw_core_handle_t core, uint32_t request_id)
 {
-    if (!s_core || !s_core->initialized || !s_core->call_cap) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    return s_core->call_cap(cap_name,
-                            input_json,
-                            request,
-                            out_output,
-                            s_core->cap_user_ctx);
+    return claw_core_control_cancel_request(core, request_id);
 }
 
-esp_err_t claw_core_cancel_request(uint32_t request_id)
+claw_core_agent_loop_phase_t claw_core_get_agent_loop_phase(claw_core_handle_t core)
 {
-    return claw_core_control_cancel_request(s_core, request_id);
+    return claw_core_control_get_phase(core);
 }
 
-claw_core_agent_loop_phase_t claw_core_get_agent_loop_phase(void)
+esp_err_t claw_core_submit(claw_core_handle_t core,
+                           const claw_core_request_t *request,
+                           uint32_t timeout_ms)
 {
-    return claw_core_control_get_phase(s_core);
+    return claw_core_ingress_submit(core, request, timeout_ms);
 }
 
-esp_err_t claw_core_submit(const claw_core_request_t *request, uint32_t timeout_ms)
+esp_err_t claw_core_receive(claw_core_handle_t core,
+                            claw_core_response_t *response,
+                            uint32_t timeout_ms)
 {
-    return claw_core_ingress_submit(s_core, request, timeout_ms);
+    return claw_core_receive_for(core, 0, response, timeout_ms);
 }
 
-esp_err_t claw_core_receive(claw_core_response_t *response, uint32_t timeout_ms)
-{
-    return claw_core_receive_for(0, response, timeout_ms);
-}
-
-esp_err_t claw_core_receive_for(uint32_t request_id,
+esp_err_t claw_core_receive_for(claw_core_handle_t core,
+                                uint32_t request_id,
                                 claw_core_response_t *response,
                                 uint32_t timeout_ms)
 {
-    return claw_core_response_receive_for(s_core, request_id, response, timeout_ms);
+    return claw_core_response_receive_for(core, request_id, response, timeout_ms);
 }

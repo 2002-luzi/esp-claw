@@ -369,6 +369,7 @@ static esp_err_t openai_compatible_chat(void *backend_ctx,
     http_request.api_key = ctx->api_key;
     http_request.auth_type = ctx->auth_type;
     http_request.timeout_ms = ctx->timeout_ms;
+    http_request.abort_flag = request->abort_flag;
 
     err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
     free(url);

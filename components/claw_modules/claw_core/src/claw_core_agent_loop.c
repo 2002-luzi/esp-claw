@@ -136,8 +136,6 @@ void claw_core_agent_loop_task(void *arg)
             claw_core_ingress_clear_insert_queue_locked(core);
             xSemaphoreGive(core->inflight_lock);
         }
-        claw_llm_http_arm_abort(&core->inflight_abort);
-
         response.view.request_id = request.view.request_id;
         response.view.status = CLAW_CORE_RESPONSE_STATUS_ERROR;
         response.view.completion_type = CLAW_CORE_COMPLETION_DONE;
@@ -280,7 +278,8 @@ void claw_core_agent_loop_task(void *arg)
             }
 
             claw_core_control_set_phase(core, CLAW_CORE_AGENT_LOOP_PHASE_IN_LLM_HTTP);
-            err = claw_core_llm_chat_messages(system_prompt,
+            err = claw_core_llm_chat_messages(core,
+                                              system_prompt,
                                               messages,
                                               tools_json,
                                               &llm_response,
@@ -424,7 +423,6 @@ void claw_core_agent_loop_task(void *arg)
 
 finish_request:
         claw_core_control_set_phase(core, CLAW_CORE_AGENT_LOOP_PHASE_FINALIZING);
-        claw_llm_http_disarm_abort();
         if (xSemaphoreTake(core->inflight_lock, portMAX_DELAY) == pdTRUE) {
             bool was_cancelled = core->inflight_abort &&
                                  core->inflight_abort_reason == CLAW_CORE_CONTROL_ABORT_REASON_CANCEL;

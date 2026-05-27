@@ -49,6 +49,7 @@ typedef struct {
     const char *chat_id;
     const char *source_cap;
     const char *correlation_id;
+    claw_core_handle_t core;
     claw_cap_caller_t caller;
 } claw_cap_call_context_t;
 

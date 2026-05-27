@@ -42,6 +42,8 @@ typedef enum {
 
 #define CLAW_CORE_CONTEXT_PROVIDER_FLAG_REQUEST_START_ONLY (1U << 0)
 
+typedef struct claw_core_state *claw_core_handle_t;
+
 typedef struct {
     uint32_t request_id;
     uint32_t flags;
@@ -125,6 +127,7 @@ typedef esp_err_t (*claw_core_call_cap_fn)(const char *cap_name,
                                            void *user_ctx);
 
 typedef struct {
+    uint32_t instance_id;
     const char *api_key;
     const char *backend_type;
     const char *model;
@@ -178,21 +181,25 @@ typedef struct {
 typedef void (*claw_core_completion_observer_fn)(const claw_core_completion_summary_t *summary,
                                                  void *user_ctx);
 
-esp_err_t claw_core_init(const claw_core_config_t *config);
-esp_err_t claw_core_start(void);
-esp_err_t claw_core_add_context_provider(const claw_core_context_provider_t *provider);
-esp_err_t claw_core_add_completion_observer(claw_core_completion_observer_fn observer,
+esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t *out_core);
+esp_err_t claw_core_start(claw_core_handle_t core);
+esp_err_t claw_core_destroy(claw_core_handle_t core);
+esp_err_t claw_core_add_context_provider(claw_core_handle_t core,
+                                         const claw_core_context_provider_t *provider);
+esp_err_t claw_core_add_completion_observer(claw_core_handle_t core,
+                                            claw_core_completion_observer_fn observer,
                                             void *user_ctx);
-esp_err_t claw_core_call_cap(const char *cap_name,
-                             const char *input_json,
-                             const claw_core_request_t *request,
-                             char **out_output);
 esp_err_t claw_core_publish_stage_text(const claw_core_request_t *request, const char *text);
-esp_err_t claw_core_submit(const claw_core_request_t *request, uint32_t timeout_ms);
-esp_err_t claw_core_cancel_request(uint32_t request_id);
-claw_core_agent_loop_phase_t claw_core_get_agent_loop_phase(void);
-esp_err_t claw_core_receive(claw_core_response_t *response, uint32_t timeout_ms);
-esp_err_t claw_core_receive_for(uint32_t request_id,
+esp_err_t claw_core_submit(claw_core_handle_t core,
+                           const claw_core_request_t *request,
+                           uint32_t timeout_ms);
+esp_err_t claw_core_cancel_request(claw_core_handle_t core, uint32_t request_id);
+claw_core_agent_loop_phase_t claw_core_get_agent_loop_phase(claw_core_handle_t core);
+esp_err_t claw_core_receive(claw_core_handle_t core,
+                            claw_core_response_t *response,
+                            uint32_t timeout_ms);
+esp_err_t claw_core_receive_for(claw_core_handle_t core,
+                                uint32_t request_id,
                                 claw_core_response_t *response,
                                 uint32_t timeout_ms);
 void claw_core_response_free(claw_core_response_t *response);

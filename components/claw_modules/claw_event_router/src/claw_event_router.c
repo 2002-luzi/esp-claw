@@ -1749,7 +1749,14 @@ static esp_err_t claw_event_router_execute_agent_action(
     request.target_channel = (target_channel && target_channel[0]) ? target_channel : event->source_channel;
     request.target_chat_id = (target_chat_id && target_chat_id[0]) ? target_chat_id : event->chat_id;
 
-    err = claw_core_submit(&request, s_runtime->config.core_submit_timeout_ms);
+    if (!s_runtime->config.agent_submit) {
+        ESP_LOGE(TAG, "Agent submit callback is not configured");
+        err = ESP_ERR_INVALID_STATE;
+    } else {
+        err = s_runtime->config.agent_submit(&request,
+                                             s_runtime->config.agent_submit_timeout_ms,
+                                             s_runtime->config.agent_submit_user_ctx);
+    }
 
     if (err == ESP_OK) {
         snprintf(submit_output, sizeof(submit_output), "request_id=%" PRIu32, request.request_id);
@@ -2323,8 +2330,9 @@ esp_err_t claw_event_router_start(void)
     priority = s_runtime->config.task_priority ?
                s_runtime->config.task_priority : CLAW_EVENT_ROUTER_DEFAULT_PRIO;
     core = s_runtime->config.task_core;
-    s_runtime->config.core_submit_timeout_ms = s_runtime->config.core_submit_timeout_ms ?
-                                              s_runtime->config.core_submit_timeout_ms : CLAW_EVENT_ROUTER_DEFAULT_SUBMIT;
+    s_runtime->config.agent_submit_timeout_ms = s_runtime->config.agent_submit_timeout_ms ?
+                                                s_runtime->config.agent_submit_timeout_ms :
+                                                CLAW_EVENT_ROUTER_DEFAULT_SUBMIT;
     s_runtime->config.core_receive_timeout_ms = s_runtime->config.core_receive_timeout_ms ?
                                                s_runtime->config.core_receive_timeout_ms : CLAW_EVENT_ROUTER_DEFAULT_RECEIVE;
     s_runtime->stop_requested = false;

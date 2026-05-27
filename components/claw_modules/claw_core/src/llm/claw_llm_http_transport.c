@@ -5,7 +5,6 @@
  */
 #include "llm/claw_llm_http_transport.h"
 
-#include <assert.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,44 +13,26 @@
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 static const char *TAG = "llm_http";
 
 #define CLAW_LLM_HTTP_RB_INITIAL_CAP 4096
-
-static volatile bool *s_abort_flag = NULL;
-static TaskHandle_t   s_abort_owner = NULL;
-
-void claw_llm_http_arm_abort(volatile bool *flag)
-{
-    TaskHandle_t self = xTaskGetCurrentTaskHandle();
-    assert(s_abort_flag == NULL || s_abort_owner == self);
-    s_abort_flag = flag;
-    s_abort_owner = self;
-}
-
-void claw_llm_http_disarm_abort(void)
-{
-    if (s_abort_owner == xTaskGetCurrentTaskHandle()) {
-        s_abort_flag = NULL;
-        s_abort_owner = NULL;
-    }
-}
-
-static inline bool abort_requested(void)
-{
-    return s_abort_flag &&
-           s_abort_owner == xTaskGetCurrentTaskHandle() &&
-           *s_abort_flag;
-}
 
 typedef struct {
     char *data;
     size_t len;
     size_t cap;
 } response_buffer_t;
+
+typedef struct {
+    response_buffer_t *buffer;
+    volatile bool *abort_flag;
+} http_request_context_t;
+
+static inline bool abort_requested(const http_request_context_t *ctx)
+{
+    return ctx && ctx->abort_flag && *ctx->abort_flag;
+}
 
 static char *dup_printf(const char *fmt, ...)
 {
@@ -201,14 +182,14 @@ static void response_buffer_free(response_buffer_t *buffer)
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
 {
-    response_buffer_t *buffer = (response_buffer_t *)evt->user_data;
+    http_request_context_t *ctx = (http_request_context_t *)evt->user_data;
 
-    if (abort_requested()) {
+    if (abort_requested(ctx)) {
         return ESP_FAIL;
     }
 
     if (evt->event_id == HTTP_EVENT_ON_DATA) {
-        return response_buffer_append(buffer, (const char *)evt->data, evt->data_len);
+        return response_buffer_append(ctx->buffer, (const char *)evt->data, evt->data_len);
     }
 
     return ESP_OK;
@@ -281,6 +262,7 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
                                   char **out_error_message)
 {
     response_buffer_t buffer = {0};
+    http_request_context_t request_ctx = {0};
     esp_http_client_config_t config = {0};
     esp_http_client_handle_t client = NULL;
     char *auth_header_value = NULL;
@@ -312,9 +294,11 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
         goto cleanup;
     }
 
+    request_ctx.buffer = &buffer;
+    request_ctx.abort_flag = request->abort_flag;
     config.url = request->url;
     config.event_handler = http_event_handler;
-    config.user_data = &buffer;
+    config.user_data = &request_ctx;
     config.timeout_ms = request->timeout_ms;
     config.buffer_size = 4096;
     config.buffer_size_tx = 4096;
@@ -351,7 +335,7 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
     ESP_LOGD(TAG, "POST %s", request->url);
     err = esp_http_client_perform(client);
     if (err != ESP_OK) {
-        if (abort_requested()) {
+        if (abort_requested(&request_ctx)) {
             *out_error_message = dup_printf("HTTP request aborted by caller");
             ESP_LOGW(TAG, "HTTP perform aborted: %s", esp_err_to_name(err));
             err = ESP_ERR_INVALID_STATE;
@@ -359,6 +343,12 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
             *out_error_message = dup_printf("HTTP request failed: %s", esp_err_to_name(err));
             ESP_LOGE(TAG, "HTTP perform failed: %s", esp_err_to_name(err));
         }
+        goto cleanup;
+    }
+    if (abort_requested(&request_ctx)) {
+        *out_error_message = dup_printf("HTTP request aborted by caller");
+        ESP_LOGW(TAG, "HTTP perform completed after caller abort");
+        err = ESP_ERR_INVALID_STATE;
         goto cleanup;
     }
 

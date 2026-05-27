@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "app_claw_cli.h"
+#include "app_claw.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -126,6 +127,7 @@ static int submit_and_print(const char *prompt, const char *session_id)
 {
     claw_core_request_t request = {0};
     claw_core_response_t response = {0};
+    claw_core_handle_t core = app_claw_get_core();
     esp_err_t err;
 
     request.request_id = s_next_request_id++;
@@ -140,13 +142,18 @@ static int submit_and_print(const char *prompt, const char *session_id)
         printf("Submitting request %" PRIu32 " [single-turn]...\n", request.request_id);
     }
 
-    err = claw_core_submit(&request, 5000);
+    if (!core) {
+        printf("claw_core is not ready\n");
+        return 1;
+    }
+
+    err = claw_core_submit(core, &request, 5000);
     if (err != ESP_OK) {
         printf("submit failed: %s\n", esp_err_to_name(err));
         return 1;
     }
 
-    err = claw_core_receive_for(request.request_id, &response, 130000);
+    err = claw_core_receive_for(core, request.request_id, &response, 130000);
     if (err != ESP_OK) {
         printf("receive failed: %s\n", esp_err_to_name(err));
         return 1;
@@ -259,6 +266,7 @@ static int cmd_cap_call(int argc, char **argv)
     claw_cap_call_context_t ctx = {
         .caller = CLAW_CAP_CALLER_CONSOLE,
         .session_id = s_current_session_id,
+        .core = app_claw_get_core(),
     };
 
     if (argc < 3) {

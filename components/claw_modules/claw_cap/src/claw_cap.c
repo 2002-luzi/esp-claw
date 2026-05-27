@@ -357,8 +357,6 @@ esp_err_t claw_cap_call_from_core(const char *cap_name,
     esp_err_t err;
     const size_t output_size = CLAW_CAP_CORE_OUTPUT_SIZE;
 
-    (void)user_ctx;
-
     if (!cap_name || !out_output) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -375,6 +373,9 @@ esp_err_t claw_cap_call_from_core(const char *cap_name,
         ctx.channel = request->source_channel;
         ctx.chat_id = request->source_chat_id;
         ctx.source_cap = request->source_cap;
+        if (user_ctx) {
+            ctx.core = *((claw_core_handle_t *)user_ctx);
+        }
         ctx.caller = CLAW_CAP_CALLER_AGENT;
     }
 
