@@ -88,6 +88,9 @@ dependencies:
   claw_event_router:
     path: ../../claw_modules/claw_event_router
 
+  claw_manager:
+    path: ../../claw_modules/claw_manager
+
   claw_memory:
     path: ../../claw_modules/claw_memory
 

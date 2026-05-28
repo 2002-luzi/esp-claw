@@ -18,11 +18,6 @@
 extern "C" {
 #endif
 
-typedef size_t (*claw_event_router_session_builder_fn)(const claw_event_t *event,
-                                                       char *buf,
-                                                       size_t buf_size,
-                                                       void *user_ctx);
-
 typedef esp_err_t (*claw_event_router_outbound_resolver_fn)(const claw_event_t *event,
                                                             const char *target_channel,
                                                             const char *target_endpoint,
@@ -48,8 +43,6 @@ typedef struct {
     claw_event_router_agent_submit_fn agent_submit;
     void *agent_submit_user_ctx;
     bool default_route_messages_to_agent;
-    claw_event_router_session_builder_fn session_builder;
-    void *session_builder_user_ctx;
     claw_event_router_outbound_resolver_fn outbound_resolver;
     void *outbound_resolver_user_ctx;
 } claw_event_router_config_t;

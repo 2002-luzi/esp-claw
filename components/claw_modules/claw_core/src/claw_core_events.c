@@ -81,7 +81,7 @@ static esp_err_t build_out_message_event_common(const char *event_id_prefix,
     strlcpy(out_event->content_type, "text", sizeof(out_event->content_type));
     out_event->text = (char *)text;
     out_event->timestamp_ms = now_ms;
-    out_event->session_policy = CLAW_EVENT_SESSION_POLICY_CHAT;
+    out_event->session_policy = CLAW_SESSION_POLICY_CHAT;
     return ESP_OK;
 }
 

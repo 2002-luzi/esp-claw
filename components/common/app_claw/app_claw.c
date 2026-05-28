@@ -247,11 +247,6 @@ esp_err_t app_claw_start(const app_claw_config_t *config,
         .agent_submit = app_claw_agent_submit,
         .agent_submit_user_ctx = &s_core,
         .default_route_messages_to_agent = false,
-#if CONFIG_APP_CLAW_CAP_SESSION_MGR
-        .session_builder = cap_session_mgr_build_session_id,
-#else
-        .session_builder = NULL,
-#endif
     };
     bool llm_enabled = false;
 

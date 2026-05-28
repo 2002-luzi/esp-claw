@@ -134,7 +134,7 @@ static esp_mcp_value_t cap_mcp_server_report_state_callback(
     strlcpy(event.message_id, state_name, sizeof(event.message_id));
     strlcpy(event.correlation_id, state_name, sizeof(event.correlation_id));
     event.timestamp_ms = timestamp_ms;
-    event.session_policy = CLAW_EVENT_SESSION_POLICY_TRIGGER;
+    event.session_policy = CLAW_SESSION_POLICY_TRIGGER;
     event.payload_json = payload_json;
 
     if (claw_event_router_publish(&event) != ESP_OK) {
@@ -202,7 +202,7 @@ static esp_mcp_value_t cap_mcp_server_emit_event_callback(
     strlcpy(event.message_id, event_type, sizeof(event.message_id));
     strlcpy(event.correlation_id, event_type, sizeof(event.correlation_id));
     event.timestamp_ms = cap_mcp_server_current_time_ms();
-    event.session_policy = CLAW_EVENT_SESSION_POLICY_TRIGGER;
+    event.session_policy = CLAW_SESSION_POLICY_TRIGGER;
     event.text = (char *)(text ? text : "");
     event.payload_json = (char *)(payload_json && payload_json[0] ? payload_json : "{}");
 

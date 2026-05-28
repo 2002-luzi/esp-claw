@@ -8,22 +8,19 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "claw_event_router.h"
+#include "claw_session_mgr.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-typedef esp_err_t (*cap_session_mgr_delete_session_fn_t)(const char *session_id,
-                                                         bool *out_deleted_any,
-                                                         void *user_ctx);
+typedef claw_session_mgr_delete_session_fn_t cap_session_mgr_delete_session_fn_t;
 
 esp_err_t cap_session_mgr_register_group(void);
 esp_err_t cap_session_mgr_set_session_root_dir(const char *session_root_dir);
 esp_err_t cap_session_mgr_set_delete_session_handler(cap_session_mgr_delete_session_fn_t fn,
                                                      void *user_ctx);
-size_t cap_session_mgr_build_session_id(const claw_event_t *event, char *buf, size_t buf_size, void *user_ctx);
 
 #ifdef __cplusplus
 }
