@@ -40,6 +40,9 @@
 #if CONFIG_APP_CLAW_LUA_MODULE_AUDIO && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
 #include "lua_module_audio.h"
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_TTS && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
+#include "lua_module_tts.h"
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_BOARD_MANAGER
 #include "lua_module_board_manager.h"
 #endif
@@ -309,6 +312,14 @@ static esp_err_t app_lua_register_audio(const char *fatfs_base_path)
 }
 #endif
 
+#if CONFIG_APP_CLAW_LUA_MODULE_TTS && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
+static esp_err_t app_lua_register_tts(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_module_tts_register();
+}
+#endif
+
 #if CONFIG_APP_CLAW_LUA_MODULE_BOARD_MANAGER
 static esp_err_t app_lua_register_board_manager(const char *fatfs_base_path)
 {
@@ -544,6 +555,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_MODULE_AUDIO && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
     { "audio", "Audio", app_lua_register_audio },
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_TTS && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
+    { "tts", "TTS", app_lua_register_tts },
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_BOARD_MANAGER
     { "board_manager", "Board Manager", app_lua_register_board_manager },
 #endif
@@ -650,6 +664,9 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
     /* --- lua_module (higher-level modules) --- */
 #if CONFIG_APP_CLAW_LUA_MODULE_AUDIO && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
     { "audio", "Audio" },
+#endif
+#if CONFIG_APP_CLAW_LUA_MODULE_TTS && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
+    { "tts", "TTS" },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_BOARD_MANAGER
     { "board_manager", "Board Manager" },

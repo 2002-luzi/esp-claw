@@ -1,0 +1,16 @@
+idf_component_register(
+    SRC_DIRS
+        "src"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        cap_lua
+        espressif__esp_board_manager
+        esp_codec_dev
+        esp_http_client
+        esp-tls
+        http_reuse
+        json
+        mbedtls
+        settings
+)
