@@ -762,6 +762,112 @@ esp_err_t claw_agent_mgr_close_agent(const claw_cap_call_context_t *ctx,
     return err;
 }
 
+esp_err_t claw_agent_mgr_delete_agent(const claw_cap_call_context_t *ctx,
+                                      const char *agent_id)
+{
+    claw_agent_mgr_agent_t *agent = NULL;
+    claw_core_handle_t core = NULL;
+    char agent_id_copy[CLAW_SESSION_MGR_ID_SIZE] = {0};
+    char parent_session_id[CLAW_SESSION_MGR_ID_SIZE] = {0};
+    bool known = false;
+    bool deleted_any = false;
+    esp_err_t err = ESP_OK;
+
+    if (!claw_agent_mgr_ctx_is_root_agent(ctx) ||
+            !ctx->session_id || !ctx->session_id[0] ||
+            !agent_id || !agent_id[0] ||
+            strcmp(agent_id, CLAW_AGENT_MGR_ROOT_AGENT_ID) == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlcpy(agent_id_copy, agent_id, sizeof(agent_id_copy)) >= sizeof(agent_id_copy) ||
+            strlcpy(parent_session_id, ctx->session_id, sizeof(parent_session_id)) >= sizeof(parent_session_id)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    err = claw_session_mgr_subagent_id_is_known(parent_session_id, agent_id_copy, &known);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (!known) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    claw_agent_mgr_lock();
+    agent = claw_agent_mgr_find_locked(agent_id_copy);
+    if (agent && strcmp(agent->parent_session_id, parent_session_id) != 0) {
+        claw_agent_mgr_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (agent && agent->closing) {
+        claw_agent_mgr_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (agent) {
+        agent->closing = true;
+        if (agent->core) {
+            core = agent->core;
+            agent->core = NULL;
+            agent->status = CLAW_AGENT_MGR_STATUS_CLOSED;
+        }
+    }
+    claw_agent_mgr_unlock();
+
+    if (core) {
+        err = claw_core_destroy(core);
+        claw_agent_mgr_lock();
+        agent = claw_agent_mgr_find_locked(agent_id_copy);
+        if (agent && agent->closing && !agent->core) {
+            if (err != ESP_OK) {
+                agent->closing = false;
+                agent->status = CLAW_AGENT_MGR_STATUS_ERROR;
+                snprintf(agent->last_error, sizeof(agent->last_error), "%s", esp_err_to_name(err));
+            } else {
+                agent->status = CLAW_AGENT_MGR_STATUS_CLOSED;
+            }
+        }
+        claw_agent_mgr_unlock();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Delete failed to close subagent id=%s: %s",
+                     agent_id_copy,
+                     esp_err_to_name(err));
+            return err;
+        }
+    }
+
+    err = claw_session_mgr_delete_subagent_session(parent_session_id,
+                                                   agent_id_copy,
+                                                   &deleted_any);
+    if (err != ESP_OK) {
+        claw_agent_mgr_lock();
+        agent = claw_agent_mgr_find_locked(agent_id_copy);
+        if (agent && agent->closing && !agent->core) {
+            agent->closing = false;
+            agent->status = CLAW_AGENT_MGR_STATUS_ERROR;
+            snprintf(agent->last_error, sizeof(agent->last_error), "%s", esp_err_to_name(err));
+        }
+        claw_agent_mgr_unlock();
+        ESP_LOGE(TAG, "Delete subagent persistence failed id=%s parent_session=%s: %s",
+                 agent_id_copy,
+                 parent_session_id,
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    claw_agent_mgr_lock();
+    agent = claw_agent_mgr_find_locked(agent_id_copy);
+    if (agent && !agent->core && agent->closing) {
+        memset(agent, 0, sizeof(*agent));
+    }
+    claw_agent_mgr_unlock();
+
+    ESP_LOGI(TAG,
+             "Deleted subagent id=%s parent_session=%s history_deleted=%s",
+             agent_id_copy,
+             parent_session_id,
+             deleted_any ? "true" : "false");
+    return ESP_OK;
+}
+
 const char *claw_agent_mgr_status_to_string(claw_agent_mgr_status_t status)
 {
     switch (status) {

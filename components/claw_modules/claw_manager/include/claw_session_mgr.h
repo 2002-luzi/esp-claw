@@ -67,6 +67,9 @@ esp_err_t claw_session_mgr_alloc_subagent_session_id(const char *parent_session_
 esp_err_t claw_session_mgr_subagent_id_is_known(const char *parent_session_id,
                                                 const char *subagent_id,
                                                 bool *out_known);
+esp_err_t claw_session_mgr_delete_subagent_session(const char *parent_session_id,
+                                                   const char *subagent_id,
+                                                   bool *out_deleted_any);
 esp_err_t claw_session_mgr_new_chat_session(uint32_t agent_id,
                                             const char *source_channel,
                                             const char *chat_id,

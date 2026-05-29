@@ -226,6 +226,48 @@ static esp_err_t cap_agent_mgr_close_execute(const char *input_json,
     return ESP_OK;
 }
 
+static esp_err_t cap_agent_mgr_delete_execute(const char *input_json,
+                                              const claw_cap_call_context_t *ctx,
+                                              char *output,
+                                              size_t output_size)
+{
+    cJSON *root = NULL;
+    const char *agent_id = NULL;
+    char agent_id_copy[CLAW_SESSION_MGR_ID_SIZE] = {0};
+    esp_err_t err;
+
+    err = cap_agent_mgr_require_root(ctx, output, output_size);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    root = cJSON_Parse(input_json ? input_json : "{}");
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        snprintf(output, output_size, "Error: invalid JSON input.");
+        return ESP_ERR_INVALID_ARG;
+    }
+    agent_id = cap_agent_mgr_get_string(root, "agent_id");
+    if (!agent_id || !agent_id[0]) {
+        cJSON_Delete(root);
+        snprintf(output, output_size, "Error: missing agent_id.");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (strlcpy(agent_id_copy, agent_id, sizeof(agent_id_copy)) >= sizeof(agent_id_copy)) {
+        cJSON_Delete(root);
+        snprintf(output, output_size, "Error: agent_id is too long.");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    err = claw_agent_mgr_delete_agent(ctx, agent_id_copy);
+    cJSON_Delete(root);
+    if (err != ESP_OK) {
+        snprintf(output, output_size, "Error: delete_agent failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    snprintf(output, output_size, "{\"agent_id\":\"%s\",\"status\":\"deleted\"}", agent_id_copy);
+    return ESP_OK;
+}
+
 static const claw_cap_descriptor_t s_agent_mgr_caps[] = {
     {
         .id = "spawn_agent",
@@ -266,6 +308,16 @@ static const claw_cap_descriptor_t s_agent_mgr_caps[] = {
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM | CLAW_CAP_FLAG_ROOT_AGENT_ONLY,
         .input_schema_json = "{\"type\":\"object\",\"properties\":{\"agent_id\":{\"type\":\"string\"}},\"required\":[\"agent_id\"]}",
         .execute = cap_agent_mgr_close_execute,
+    },
+    {
+        .id = "delete_agent",
+        .name = "delete_agent",
+        .family = "agent_mgr",
+        .description = "Permanently delete a closed or live subagent runtime history and parent map entry.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM | CLAW_CAP_FLAG_ROOT_AGENT_ONLY,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"agent_id\":{\"type\":\"string\"}},\"required\":[\"agent_id\"]}",
+        .execute = cap_agent_mgr_delete_execute,
     },
 };
 

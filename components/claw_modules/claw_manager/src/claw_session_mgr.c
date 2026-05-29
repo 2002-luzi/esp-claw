@@ -877,6 +877,23 @@ static bool claw_session_mgr_subagent_map_has_child(const claw_session_mgr_subag
     return false;
 }
 
+static esp_err_t claw_session_mgr_subagent_map_find_child(const claw_session_mgr_subagent_map_t *map,
+                                                          const char *subagent_id,
+                                                          size_t *out_index)
+{
+    if (!map || !subagent_id || !subagent_id[0] || !out_index) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < map->child_count; i++) {
+        if (strcmp(map->child_ids[i], subagent_id) == 0) {
+            *out_index = i;
+            return ESP_OK;
+        }
+    }
+
+    return ESP_ERR_NOT_FOUND;
+}
+
 esp_err_t claw_session_mgr_alloc_subagent_session_id(const char *parent_session_id,
                                                      char *buf,
                                                      size_t buf_size,
@@ -959,6 +976,69 @@ esp_err_t claw_session_mgr_subagent_id_is_known(const char *parent_session_id,
     if (err == ESP_ERR_NOT_FOUND) {
         return ESP_OK;
     }
+    return err;
+}
+
+esp_err_t claw_session_mgr_delete_subagent_session(const char *parent_session_id,
+                                                   const char *subagent_id,
+                                                   bool *out_deleted_any)
+{
+    claw_session_mgr_subagent_map_t map;
+    bool deleted_any = false;
+    size_t child_index = CLAW_SESSION_MGR_SUBAGENT_MAX;
+    esp_err_t err;
+
+    if (!parent_session_id || !parent_session_id[0] ||
+            !subagent_id || !subagent_id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (out_deleted_any) {
+        *out_deleted_any = false;
+    }
+    if (!s_session_mgr.configured || !s_session_mgr.mutex) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
+    err = claw_session_mgr_require_configured_locked();
+    if (err == ESP_OK) {
+        err = claw_session_mgr_load_subagent_map_locked(parent_session_id, &map);
+    }
+    if (err == ESP_OK) {
+        err = claw_session_mgr_subagent_map_find_child(&map, subagent_id, &child_index);
+    }
+    if (err == ESP_OK && !s_session_mgr.delete_session) {
+        err = ESP_ERR_NOT_SUPPORTED;
+    }
+    if (err == ESP_OK) {
+        err = s_session_mgr.delete_session(subagent_id, &deleted_any, s_session_mgr.delete_session_ctx);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Delete subagent session history failed for %s: %s",
+                     subagent_id,
+                     esp_err_to_name(err));
+        }
+    }
+    if (err == ESP_OK) {
+        for (size_t i = child_index; i + 1 < map.child_count; i++) {
+            strlcpy(map.child_ids[i], map.child_ids[i + 1], sizeof(map.child_ids[i]));
+        }
+        map.child_count--;
+        map.child_ids[map.child_count][0] = '\0';
+        err = claw_session_mgr_write_subagent_map_locked(&map);
+    }
+    xSemaphoreGiveRecursive(s_session_mgr.mutex);
+
+    if (err == ESP_OK) {
+        if (out_deleted_any) {
+            *out_deleted_any = deleted_any;
+        }
+        ESP_LOGI(TAG,
+                 "Deleted subagent session parent=%s child=%s history_deleted=%s",
+                 parent_session_id,
+                 subagent_id,
+                 deleted_any ? "true" : "false");
+    }
+
     return err;
 }
 

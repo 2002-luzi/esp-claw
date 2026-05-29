@@ -91,6 +91,8 @@ esp_err_t claw_agent_mgr_inspect_agent(const claw_cap_call_context_t *ctx,
                                        claw_agent_mgr_agent_info_t *out_info);
 esp_err_t claw_agent_mgr_close_agent(const claw_cap_call_context_t *ctx,
                                      const char *agent_id);
+esp_err_t claw_agent_mgr_delete_agent(const claw_cap_call_context_t *ctx,
+                                      const char *agent_id);
 const char *claw_agent_mgr_status_to_string(claw_agent_mgr_status_t status);
 
 #ifdef __cplusplus

@@ -259,6 +259,43 @@ static esp_err_t test_persist_context(const claw_core_context_persist_batch_t *b
     return ESP_OK;
 }
 
+static esp_err_t test_delete_session_history(const char *session_id,
+                                             bool *out_deleted_any,
+                                             void *user_ctx)
+{
+    bool deleted_any = false;
+
+    (void)user_ctx;
+
+    if (!session_id || !session_id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (out_deleted_any) {
+        *out_deleted_any = false;
+    }
+    if (!test_lock_for(TEST_WAIT_MS)) {
+        return ESP_ERR_TIMEOUT;
+    }
+    for (size_t i = 0; i < s_record_count;) {
+        if (strcmp(s_records[i].session_id, session_id) != 0) {
+            i++;
+            continue;
+        }
+        free(s_records[i].text);
+        for (size_t j = i; j + 1 < s_record_count; j++) {
+            s_records[j] = s_records[j + 1];
+        }
+        s_record_count--;
+        memset(&s_records[s_record_count], 0, sizeof(s_records[s_record_count]));
+        deleted_any = true;
+    }
+    test_unlock();
+    if (out_deleted_any) {
+        *out_deleted_any = deleted_any;
+    }
+    return ESP_OK;
+}
+
 static esp_err_t test_session_history_collect(const claw_core_request_t *request,
                                               claw_core_context_t *out_context,
                                               void *user_ctx)
@@ -495,6 +532,7 @@ static void ensure_runtime_ready(void)
 
     ensure_backend_registered();
     TEST_ASSERT_EQUAL(ESP_OK, claw_session_mgr_set_session_root_dir(TEST_SESSION_ROOT));
+    TEST_ASSERT_EQUAL(ESP_OK, claw_session_mgr_set_delete_session_handler(test_delete_session_history, NULL));
     TEST_ASSERT_EQUAL(ESP_OK, claw_cap_init());
     TEST_ASSERT_EQUAL(ESP_OK, cap_agent_mgr_register_group());
     TEST_ASSERT_EQUAL(ESP_OK, claw_cap_start_all());
@@ -916,12 +954,13 @@ TEST_CASE("root-only agent manager tools are visible to root and rejected for su
     TEST_ASSERT_NOT_NULL(strstr(root_tools, "send_input"));
     TEST_ASSERT_NOT_NULL(strstr(root_tools, "inspect_agent"));
     TEST_ASSERT_NOT_NULL(strstr(root_tools, "close_agent"));
+    TEST_ASSERT_NOT_NULL(strstr(root_tools, "delete_agent"));
     TEST_ASSERT_NULL(strstr(root_tools, "wait_agent"));
-    TEST_ASSERT_NULL(strstr(root_tools, "delete_agent"));
     TEST_ASSERT_NULL(strstr(sub_tools, "spawn_agent"));
     TEST_ASSERT_NULL(strstr(sub_tools, "send_input"));
     TEST_ASSERT_NULL(strstr(sub_tools, "inspect_agent"));
     TEST_ASSERT_NULL(strstr(sub_tools, "close_agent"));
+    TEST_ASSERT_NULL(strstr(sub_tools, "delete_agent"));
 
     output = call_cap_and_dup_output("spawn_agent",
                                      "{\"prompt\":\"should be rejected\"}",
@@ -1060,6 +1099,54 @@ TEST_CASE("closed known subagent can be resumed and invalid parent scoped ids fa
                                                         "unknown child",
                                                         false));
     close_agent_if_set(&ctx, agent_id);
+}
+
+TEST_CASE("delete_agent removes subagent history and prevents lazy resume",
+          "[claw_agent_mgr][runtime][delete]")
+{
+    claw_cap_call_context_t ctx = test_root_ctx("chat:delete:parent");
+    claw_cap_call_context_t other_ctx = test_root_ctx("chat:delete:other");
+    char agent_id[CLAW_SESSION_MGR_ID_SIZE] = {0};
+    char *output = NULL;
+    claw_agent_mgr_agent_info_t info = {0};
+    bool known = false;
+
+    ensure_runtime_ready();
+    test_clear_captures();
+
+    output = call_cap_and_dup_output("spawn_agent",
+                                     "{\"prompt\":\"delete original\"}",
+                                     &ctx,
+                                     ESP_OK);
+    assert_json_string_field(output, "agent_id", agent_id, sizeof(agent_id));
+    free(output);
+    wait_for_record_text(agent_id, CLAW_CORE_CONTEXT_RECORD_USER, "delete original");
+
+    output = call_cap_and_dup_output("delete_agent",
+                                     "{\"agent_id\":\"chat:delete:parent:subagent_01\"}",
+                                     &ctx,
+                                     ESP_OK);
+    TEST_ASSERT_NOT_NULL(strstr(output, "\"status\":\"deleted\""));
+    free(output);
+
+    TEST_ASSERT_EQUAL(ESP_OK, claw_session_mgr_subagent_id_is_known(ctx.session_id, agent_id, &known));
+    TEST_ASSERT_FALSE(known);
+    TEST_ASSERT_EQUAL_UINT32(0,
+                             test_record_count_for(agent_id,
+                                                   CLAW_CORE_CONTEXT_RECORD_USER,
+                                                   "delete original"));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND, claw_agent_mgr_inspect_agent(&ctx, agent_id, &info));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND,
+                      claw_agent_mgr_send_subagent_input(&ctx,
+                                                        agent_id,
+                                                        "resume after delete",
+                                                        false));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND,
+                      claw_agent_mgr_delete_agent(&ctx, agent_id));
+    TEST_ASSERT_EQUAL(ESP_ERR_NOT_FOUND,
+                      claw_agent_mgr_delete_agent(&other_ctx, agent_id));
+    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_ARG,
+                      claw_agent_mgr_delete_agent(&ctx, CLAW_AGENT_MGR_ROOT_AGENT_ID));
 }
 
 TEST_CASE("child completion notification is injected into stored parent session",
