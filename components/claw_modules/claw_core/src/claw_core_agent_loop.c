@@ -99,7 +99,7 @@ void claw_core_agent_loop_task(void *arg)
         return;
     }
 
-    while (true) {
+    while (!core->stop_requested) {
         claw_core_request_item_t request = {0};
         claw_core_response_item_t response = {0};
         claw_core_cached_context_t *request_start_contexts = NULL;
@@ -119,6 +119,10 @@ void claw_core_agent_loop_task(void *arg)
 
         if (xQueueReceive(core->request_queue, &request, portMAX_DELAY) != pdTRUE) {
             continue;
+        }
+        if (core->stop_requested) {
+            claw_core_free_request_item(&request);
+            break;
         }
 
         if (xSemaphoreTake(core->inflight_lock, portMAX_DELAY) == pdTRUE) {
@@ -482,4 +486,9 @@ finish_request:
         claw_core_free_cached_contexts(request_start_contexts, request_start_context_count);
         claw_core_free_request_item(&request);
     }
+
+    core->task_handle = NULL;
+    core->started = false;
+    ESP_LOGI(core->log_tag, "Stopped worker task");
+    vTaskDelete(NULL);
 }

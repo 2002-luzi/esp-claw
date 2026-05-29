@@ -131,15 +131,11 @@ static char *build_current_turn_prompt(const claw_core_request_t *request)
 {
 #define CLAW_CORE_TURN_PROMPT_FMT \
     "## Current Turn Context\n" \
-    "- source_cap: %s\n" \
     "- source_channel: %s\n" \
-    "- source_chat_id: %s\n" \
-    "- source_sender_id: %s\n"
+    "- source_chat_id: %s\n"
 #define CLAW_CORE_TURN_PROMPT_ARGS(req) \
-    (req)->source_cap ? (req)->source_cap : "(unknown)", \
     (req)->source_channel ? (req)->source_channel : "(unknown)", \
-    (req)->source_chat_id ? (req)->source_chat_id : "(unknown)", \
-    (req)->source_sender_id ? (req)->source_sender_id : "(unknown)"
+    (req)->source_chat_id ? (req)->source_chat_id : "(unknown)"
 
     int needed;
     char *text = NULL;

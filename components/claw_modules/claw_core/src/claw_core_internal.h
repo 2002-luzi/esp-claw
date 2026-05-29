@@ -75,6 +75,7 @@ typedef enum {
 struct claw_core_state {
     bool initialized;
     bool started;
+    volatile bool stop_requested;
     uint32_t instance_id;
     char log_tag[32];
     char *system_prompt;

@@ -39,6 +39,7 @@ typedef enum {
 #define CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE (1U << 0)
 #define CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE (1U << 1)
 #define CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT      (1U << 2)
+#define CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE  (1U << 3)
 
 #define CLAW_CORE_CONTEXT_PROVIDER_FLAG_REQUEST_START_ONLY (1U << 0)
 
@@ -183,6 +184,7 @@ typedef void (*claw_core_completion_observer_fn)(const claw_core_completion_summ
 
 esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t *out_core);
 esp_err_t claw_core_start(claw_core_handle_t core);
+esp_err_t claw_core_stop(claw_core_handle_t core, uint32_t timeout_ms);
 esp_err_t claw_core_destroy(claw_core_handle_t core);
 esp_err_t claw_core_add_context_provider(claw_core_handle_t core,
                                          const claw_core_context_provider_t *provider);

@@ -1108,7 +1108,8 @@ TEST_CASE("claw_core create initializes resources and destroy rejects started co
     TEST_ASSERT_EQUAL(ESP_OK, claw_core_create(&config, &started_core));
     TEST_ASSERT_NOT_NULL(started_core);
     TEST_ASSERT_EQUAL(ESP_OK, claw_core_start(started_core));
-    TEST_ASSERT_EQUAL(ESP_ERR_INVALID_STATE, claw_core_destroy(started_core));
+    TEST_ASSERT_EQUAL(ESP_OK, claw_core_destroy(started_core));
+    TEST_ASSERT_EQUAL(deinit_count_before + 2, s_backend_deinit_count);
 }
 
 TEST_CASE("claw_core create destroy does not leak heap", "[claw_core][leak]")

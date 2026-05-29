@@ -52,6 +52,7 @@
 #include "cmd_cap_web_search.h"
 #endif
 #include "claw_cap.h"
+#include "claw_agent_mgr.h"
 #include "claw_core.h"
 #include "claw_event_publisher.h"
 #include "claw_event_router.h"
@@ -125,35 +126,35 @@ static char *join_args_from(int argc, char **argv, int start_index)
 
 static int submit_and_print(const char *prompt, const char *session_id)
 {
-    claw_core_request_t request = {0};
     claw_core_response_t response = {0};
-    claw_core_handle_t core = app_claw_get_core();
+    uint32_t request_id = 0;
     esp_err_t err;
-
-    request.request_id = s_next_request_id++;
-    request.user_text = prompt;
-    request.session_id = session_id;
 
     if (session_id && session_id[0]) {
         printf("Submitting request %" PRIu32 " [session=%s]...\n",
-               request.request_id,
+               s_next_request_id,
                session_id);
     } else {
-        printf("Submitting request %" PRIu32 " [single-turn]...\n", request.request_id);
+        printf("Submitting request %" PRIu32 " [single-turn]...\n", s_next_request_id);
     }
 
-    if (!core) {
+    if (!app_claw_get_core()) {
         printf("claw_core is not ready\n");
         return 1;
     }
 
-    err = claw_core_submit(core, &request, 5000);
+    err = claw_agent_mgr_submit_root_text(prompt,
+                                          session_id,
+                                          CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE,
+                                          5000,
+                                          &request_id);
     if (err != ESP_OK) {
         printf("submit failed: %s\n", esp_err_to_name(err));
         return 1;
     }
+    s_next_request_id = request_id + 1;
 
-    err = claw_core_receive_for(core, request.request_id, &response, 130000);
+    err = claw_agent_mgr_receive_root_for(request_id, &response, 130000);
     if (err != ESP_OK) {
         printf("receive failed: %s\n", esp_err_to_name(err));
         return 1;

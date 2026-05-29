@@ -188,6 +188,9 @@ esp_err_t claw_core_publish_stage_text(const claw_core_request_t *request, const
     if (!request || !text || !text[0]) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!(request->flags & CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE)) {
+        return ESP_OK;
+    }
 
     now_ms = claw_core_now_ms();
     err = build_out_message_event_common(

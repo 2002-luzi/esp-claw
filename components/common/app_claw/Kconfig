@@ -163,6 +163,13 @@ menu "App Claw Config"
                 Enable the session manager capability and keep app_claw's direct dependency
                 on cap_session_mgr.
 
+        config APP_CLAW_CAP_AGENT_MGR
+            bool "Enable agent manager capability"
+            default y
+            depends on APP_CLAW_CAP_SESSION_MGR
+            help
+                Enable root-only subagent management tools backed by claw_agent_mgr.
+
     endmenu
 
     menu "App Claw Lua Modules"

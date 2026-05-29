@@ -7,6 +7,11 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_FILES} == True
     path: ../../claw_capabilities/cap_files
 
+  cap_agent_mgr:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_AGENT_MGR} == True
+    path: ../../claw_capabilities/cap_agent_mgr
+
   cap_im_platform:
     rules:
       - if: >-

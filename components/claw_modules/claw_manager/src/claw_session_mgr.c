@@ -21,18 +21,28 @@
 static const char *TAG = "claw_session_mgr";
 
 #define CLAW_SESSION_MGR_MAP_DIRNAME  "chat_map"
+#define CLAW_SESSION_MGR_SUBAGENT_DIRNAME "subagent_map"
 #define CLAW_SESSION_MGR_ROOT_SIZE    160
 #define CLAW_SESSION_MGR_MAP_ROOT_SIZE 192
 #define CLAW_SESSION_MGR_DEFAULT_BASE "default_"
+#define CLAW_SESSION_MGR_SUBAGENT_MAX 16
 
 typedef struct {
     bool configured;
     char session_root_dir[CLAW_SESSION_MGR_ROOT_SIZE];
     char mapping_root_dir[CLAW_SESSION_MGR_MAP_ROOT_SIZE];
+    char subagent_root_dir[CLAW_SESSION_MGR_MAP_ROOT_SIZE];
     SemaphoreHandle_t mutex;
     claw_session_mgr_delete_session_fn_t delete_session;
     void *delete_session_ctx;
 } claw_session_mgr_state_t;
+
+typedef struct {
+    char parent_session_id[CLAW_SESSION_MGR_ID_SIZE];
+    uint32_t next_suffix;
+    size_t child_count;
+    char child_ids[CLAW_SESSION_MGR_SUBAGENT_MAX][CLAW_SESSION_MGR_ID_SIZE];
+} claw_session_mgr_subagent_map_t;
 
 static claw_session_mgr_state_t s_session_mgr = {0};
 
@@ -163,7 +173,11 @@ static esp_err_t claw_session_mgr_build_chat_key(uint32_t agent_id,
         return ESP_ERR_INVALID_ARG;
     }
 
-    written = snprintf(buf, buf_size, "agent:%" PRIu32 ":chat:%s:%s", agent_id, source_channel, chat_id);
+    if (agent_id == 0) {
+        written = snprintf(buf, buf_size, "chat:%s:%s", source_channel, chat_id);
+    } else {
+        written = snprintf(buf, buf_size, "agent:%" PRIu32 ":chat:%s:%s", agent_id, source_channel, chat_id);
+    }
     if (written < 0 || (size_t)written >= buf_size) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -505,30 +519,53 @@ static esp_err_t claw_session_mgr_write_default_session_id(const claw_session_bu
 
     switch (ctx->session_policy) {
     case CLAW_SESSION_POLICY_CHAT:
-        written = snprintf(buf,
-                           buf_size,
-                           "agent:%" PRIu32 ":chat:%s:%s",
-                           ctx->agent_id,
-                           source_channel,
-                           chat_id);
+        if (ctx->agent_id == 0) {
+            written = snprintf(buf, buf_size, "chat:%s:%s", source_channel, chat_id);
+        } else {
+            written = snprintf(buf,
+                               buf_size,
+                               "agent:%" PRIu32 ":chat:%s:%s",
+                               ctx->agent_id,
+                               source_channel,
+                               chat_id);
+        }
         break;
     case CLAW_SESSION_POLICY_TRIGGER:
-        written = snprintf(buf,
-                           buf_size,
-                           "agent:%" PRIu32 ":trigger:%s:%s",
-                           ctx->agent_id,
-                           source_cap[0] ? source_cap : "system",
-                           claw_session_mgr_event_key(ctx));
+        if (ctx->agent_id == 0) {
+            written = snprintf(buf,
+                               buf_size,
+                               "trigger:%s:%s",
+                               source_cap[0] ? source_cap : "system",
+                               claw_session_mgr_event_key(ctx));
+        } else {
+            written = snprintf(buf,
+                               buf_size,
+                               "agent:%" PRIu32 ":trigger:%s:%s",
+                               ctx->agent_id,
+                               source_cap[0] ? source_cap : "system",
+                               claw_session_mgr_event_key(ctx));
+        }
         break;
     case CLAW_SESSION_POLICY_GLOBAL:
-        written = snprintf(buf,
-                           buf_size,
-                           "agent:%" PRIu32 ":global:%s",
-                           ctx->agent_id,
-                           source_cap[0] ? source_cap : "router");
+        if (ctx->agent_id == 0) {
+            written = snprintf(buf,
+                               buf_size,
+                               "global:%s",
+                               source_cap[0] ? source_cap : "router");
+        } else {
+            written = snprintf(buf,
+                               buf_size,
+                               "agent:%" PRIu32 ":global:%s",
+                               ctx->agent_id,
+                               source_cap[0] ? source_cap : "router");
+        }
         break;
     case CLAW_SESSION_POLICY_EPHEMERAL:
-        written = snprintf(buf, buf_size, "agent:%" PRIu32 ":ephemeral:%s", ctx->agent_id, event_id);
+        if (ctx->agent_id == 0) {
+            written = snprintf(buf, buf_size, "ephemeral:%s", event_id);
+        } else {
+            written = snprintf(buf, buf_size, "agent:%" PRIu32 ":ephemeral:%s", ctx->agent_id, event_id);
+        }
         break;
     case CLAW_SESSION_POLICY_NOSAVE:
         buf[0] = '\0';
@@ -537,12 +574,16 @@ static esp_err_t claw_session_mgr_write_default_session_id(const claw_session_bu
         }
         return ESP_OK;
     default:
-        written = snprintf(buf,
-                           buf_size,
-                           "agent:%" PRIu32 ":chat:%s:%s",
-                           ctx->agent_id,
-                           source_channel,
-                           chat_id);
+        if (ctx->agent_id == 0) {
+            written = snprintf(buf, buf_size, "chat:%s:%s", source_channel, chat_id);
+        } else {
+            written = snprintf(buf,
+                               buf_size,
+                               "agent:%" PRIu32 ":chat:%s:%s",
+                               ctx->agent_id,
+                               source_channel,
+                               chat_id);
+        }
         break;
     }
 
@@ -588,6 +629,14 @@ esp_err_t claw_session_mgr_set_session_root_dir(const char *session_root_dir)
     if (written < 0 || (size_t)written >= sizeof(s_session_mgr.mapping_root_dir)) {
         return ESP_ERR_INVALID_SIZE;
     }
+    written = snprintf(s_session_mgr.subagent_root_dir,
+                       sizeof(s_session_mgr.subagent_root_dir),
+                       "%s/%s",
+                       session_root_dir,
+                       CLAW_SESSION_MGR_SUBAGENT_DIRNAME);
+    if (written < 0 || (size_t)written >= sizeof(s_session_mgr.subagent_root_dir)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
 
     if (!s_session_mgr.mutex) {
         s_session_mgr.mutex = xSemaphoreCreateRecursiveMutex();
@@ -596,7 +645,8 @@ esp_err_t claw_session_mgr_set_session_root_dir(const char *session_root_dir)
         return ESP_ERR_NO_MEM;
     }
     if (claw_session_mgr_ensure_dir(s_session_mgr.session_root_dir) != ESP_OK ||
-            claw_session_mgr_ensure_dir(s_session_mgr.mapping_root_dir) != ESP_OK) {
+            claw_session_mgr_ensure_dir(s_session_mgr.mapping_root_dir) != ESP_OK ||
+            claw_session_mgr_ensure_dir(s_session_mgr.subagent_root_dir) != ESP_OK) {
         return ESP_FAIL;
     }
 
@@ -617,6 +667,299 @@ esp_err_t claw_session_mgr_set_delete_session_handler(claw_session_mgr_delete_se
     }
 
     return ESP_OK;
+}
+
+static esp_err_t claw_session_mgr_build_subagent_mapping_path_locked(const char *parent_session_id,
+                                                                     char *path,
+                                                                     size_t path_size)
+{
+    char safe_key[40];
+    uint32_t hash;
+    int written;
+
+    if (!parent_session_id || !parent_session_id[0] || !path || path_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    claw_session_mgr_sanitize(parent_session_id, safe_key, sizeof(safe_key));
+    if (strlen(safe_key) > 24) {
+        safe_key[24] = '\0';
+    }
+    hash = claw_session_mgr_hash(parent_session_id);
+    written = snprintf(path,
+                       path_size,
+                       "%s/subagents_%s_%08" PRIx32 ".json",
+                       s_session_mgr.subagent_root_dir,
+                       safe_key[0] ? safe_key : "parent",
+                       hash);
+    if (written < 0 || (size_t)written >= path_size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t claw_session_mgr_write_subagent_map_locked(const claw_session_mgr_subagent_map_t *map)
+{
+    char path[CLAW_SESSION_MGR_PATH_SIZE];
+    cJSON *root = NULL;
+    cJSON *children = NULL;
+    char *json = NULL;
+    FILE *file = NULL;
+    esp_err_t err;
+
+    if (!map || !map->parent_session_id[0] ||
+            map->next_suffix == 0 ||
+            map->child_count > CLAW_SESSION_MGR_SUBAGENT_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = claw_session_mgr_build_subagent_mapping_path_locked(map->parent_session_id,
+                                                              path,
+                                                              sizeof(path));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    root = cJSON_CreateObject();
+    children = cJSON_CreateArray();
+    if (!root || !children) {
+        cJSON_Delete(root);
+        cJSON_Delete(children);
+        return ESP_ERR_NO_MEM;
+    }
+    if (!cJSON_AddStringToObject(root, "parent_session_id", map->parent_session_id) ||
+            !cJSON_AddNumberToObject(root, "next_suffix", map->next_suffix)) {
+        cJSON_Delete(root);
+        cJSON_Delete(children);
+        return ESP_ERR_NO_MEM;
+    }
+    for (size_t i = 0; i < map->child_count; i++) {
+        cJSON *item = cJSON_CreateString(map->child_ids[i]);
+
+        if (!item) {
+            cJSON_Delete(root);
+            cJSON_Delete(children);
+            return ESP_ERR_NO_MEM;
+        }
+        cJSON_AddItemToArray(children, item);
+    }
+    cJSON_AddItemToObject(root, "child_ids", children);
+    children = NULL;
+
+    json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    file = fopen(path, "wb");
+    if (!file) {
+        free(json);
+        return ESP_FAIL;
+    }
+    if (fputs(json, file) < 0) {
+        fclose(file);
+        free(json);
+        return ESP_FAIL;
+    }
+    fclose(file);
+    free(json);
+    return ESP_OK;
+}
+
+static esp_err_t claw_session_mgr_load_subagent_map_locked(const char *parent_session_id,
+                                                           claw_session_mgr_subagent_map_t *out_map)
+{
+    char path[CLAW_SESSION_MGR_PATH_SIZE];
+    char *text = NULL;
+    FILE *file = NULL;
+    long size = 0;
+    cJSON *root = NULL;
+    cJSON *item = NULL;
+    cJSON *children = NULL;
+    esp_err_t err;
+
+    if (!parent_session_id || !parent_session_id[0] || !out_map) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    memset(out_map, 0, sizeof(*out_map));
+    err = claw_session_mgr_build_subagent_mapping_path_locked(parent_session_id,
+                                                              path,
+                                                              sizeof(path));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    file = fopen(path, "rb");
+    if (!file) {
+        strlcpy(out_map->parent_session_id, parent_session_id, sizeof(out_map->parent_session_id));
+        out_map->next_suffix = 1;
+        return ESP_ERR_NOT_FOUND;
+    }
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return ESP_FAIL;
+    }
+    size = ftell(file);
+    if (size < 0 || fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return ESP_FAIL;
+    }
+    text = calloc(1, (size_t)size + 1);
+    if (!text) {
+        fclose(file);
+        return ESP_ERR_NO_MEM;
+    }
+    if (size > 0 && fread(text, 1, (size_t)size, file) != (size_t)size) {
+        fclose(file);
+        free(text);
+        return ESP_FAIL;
+    }
+    fclose(file);
+
+    root = cJSON_Parse(text);
+    free(text);
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    item = cJSON_GetObjectItemCaseSensitive(root, "parent_session_id");
+    if (!cJSON_IsString(item) || strcmp(item->valuestring, parent_session_id) != 0) {
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    strlcpy(out_map->parent_session_id, item->valuestring, sizeof(out_map->parent_session_id));
+
+    item = cJSON_GetObjectItemCaseSensitive(root, "next_suffix");
+    if (!cJSON_IsNumber(item) || item->valuedouble < 1) {
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    out_map->next_suffix = (uint32_t)item->valuedouble;
+
+    children = cJSON_GetObjectItemCaseSensitive(root, "child_ids");
+    if (cJSON_IsArray(children)) {
+        size_t count = (size_t)cJSON_GetArraySize(children);
+
+        if (count > CLAW_SESSION_MGR_SUBAGENT_MAX) {
+            cJSON_Delete(root);
+            return ESP_ERR_INVALID_RESPONSE;
+        }
+        for (size_t i = 0; i < count; i++) {
+            item = cJSON_GetArrayItem(children, (int)i);
+            if (!cJSON_IsString(item) || !item->valuestring || !item->valuestring[0]) {
+                cJSON_Delete(root);
+                return ESP_ERR_INVALID_RESPONSE;
+            }
+            strlcpy(out_map->child_ids[i], item->valuestring, sizeof(out_map->child_ids[i]));
+        }
+        out_map->child_count = count;
+    }
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+static bool claw_session_mgr_subagent_map_has_child(const claw_session_mgr_subagent_map_t *map,
+                                                    const char *subagent_id)
+{
+    if (!map || !subagent_id || !subagent_id[0]) {
+        return false;
+    }
+    for (size_t i = 0; i < map->child_count; i++) {
+        if (strcmp(map->child_ids[i], subagent_id) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+esp_err_t claw_session_mgr_alloc_subagent_session_id(const char *parent_session_id,
+                                                     char *buf,
+                                                     size_t buf_size,
+                                                     size_t *out_len)
+{
+    claw_session_mgr_subagent_map_t map;
+    char candidate[CLAW_SESSION_MGR_ID_SIZE];
+    esp_err_t err;
+    int written;
+
+    if (!parent_session_id || !parent_session_id[0] || !buf || buf_size == 0 || !out_len) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    buf[0] = '\0';
+    *out_len = 0;
+    if (!s_session_mgr.configured || !s_session_mgr.mutex) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
+    err = claw_session_mgr_load_subagent_map_locked(parent_session_id, &map);
+    if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
+        xSemaphoreGiveRecursive(s_session_mgr.mutex);
+        return err;
+    }
+    if (map.child_count >= CLAW_SESSION_MGR_SUBAGENT_MAX) {
+        xSemaphoreGiveRecursive(s_session_mgr.mutex);
+        return ESP_ERR_NO_MEM;
+    }
+
+    do {
+        written = snprintf(candidate,
+                           sizeof(candidate),
+                           "%s:subagent_%02" PRIu32,
+                           parent_session_id,
+                           map.next_suffix++);
+        if (written < 0 || (size_t)written >= sizeof(candidate)) {
+            xSemaphoreGiveRecursive(s_session_mgr.mutex);
+            return ESP_ERR_INVALID_SIZE;
+        }
+    } while (claw_session_mgr_subagent_map_has_child(&map, candidate));
+
+    strlcpy(map.child_ids[map.child_count++], candidate, sizeof(map.child_ids[0]));
+    err = claw_session_mgr_write_subagent_map_locked(&map);
+    xSemaphoreGiveRecursive(s_session_mgr.mutex);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (strlcpy(buf, candidate, buf_size) >= buf_size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    *out_len = strlen(buf);
+    return ESP_OK;
+}
+
+esp_err_t claw_session_mgr_subagent_id_is_known(const char *parent_session_id,
+                                                const char *subagent_id,
+                                                bool *out_known)
+{
+    claw_session_mgr_subagent_map_t map;
+    esp_err_t err;
+
+    if (!parent_session_id || !parent_session_id[0] ||
+            !subagent_id || !subagent_id[0] || !out_known) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_known = false;
+    if (!s_session_mgr.configured || !s_session_mgr.mutex) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
+    err = claw_session_mgr_load_subagent_map_locked(parent_session_id, &map);
+    if (err == ESP_OK) {
+        *out_known = claw_session_mgr_subagent_map_has_child(&map, subagent_id);
+    }
+    xSemaphoreGiveRecursive(s_session_mgr.mutex);
+
+    if (err == ESP_ERR_NOT_FOUND) {
+        return ESP_OK;
+    }
+    return err;
 }
 
 esp_err_t claw_session_mgr_build_session_id(const claw_session_build_context_t *ctx,

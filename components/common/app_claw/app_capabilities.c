@@ -12,6 +12,9 @@
 #include <stdbool.h>
 #include <string.h>
 
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+#include "cap_agent_mgr.h"
+#endif
 #if CONFIG_APP_CLAW_CAP_FILES
 #include "cap_files.h"
 #endif
@@ -565,7 +568,20 @@ static esp_err_t app_cap_register_session_mgr(const app_claw_config_t *config,
 }
 #endif
 
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+static esp_err_t app_cap_register_agent_mgr(const app_claw_config_t *config,
+                                            const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return cap_agent_mgr_register_group();
+}
+#endif
+
 static const app_capability_group_entry_t s_capability_group_entries[] = {
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+    { "cap_agent_mgr", "Agent Manager", "Register agent manager cap", true, NULL, app_cap_register_agent_mgr },
+#endif
 #if CONFIG_APP_CLAW_CAP_IM_QQ
     { "cap_im_qq", "QQ", "Register QQ cap", false, app_cap_prepare_im_qq, app_cap_register_im_qq },
 #endif
@@ -626,6 +642,9 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
 };
 
 static const app_capability_group_info_t s_capability_group_infos[] = {
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+    { "cap_agent_mgr", "Agent Manager", true },
+#endif
 #if CONFIG_APP_CLAW_CAP_IM_QQ
     { "cap_im_qq", "QQ", false },
 #endif

@@ -25,10 +25,6 @@ typedef esp_err_t (*claw_event_router_outbound_resolver_fn)(const claw_event_t *
                                                             size_t cap_name_size,
                                                             void *user_ctx);
 
-typedef esp_err_t (*claw_event_router_agent_submit_fn)(const claw_core_request_t *request,
-                                                       uint32_t timeout_ms,
-                                                       void *user_ctx);
-
 typedef struct {
     const char *rules_path;
     size_t max_rules;
@@ -39,9 +35,6 @@ typedef struct {
     UBaseType_t task_priority;
     BaseType_t task_core;
     uint32_t agent_submit_timeout_ms;
-    uint32_t core_receive_timeout_ms;
-    claw_event_router_agent_submit_fn agent_submit;
-    void *agent_submit_user_ctx;
     bool default_route_messages_to_agent;
     claw_event_router_outbound_resolver_fn outbound_resolver;
     void *outbound_resolver_user_ctx;

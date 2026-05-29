@@ -188,14 +188,48 @@ esp_err_t claw_core_start(claw_core_handle_t core)
     return ESP_OK;
 }
 
+esp_err_t claw_core_stop(claw_core_handle_t core, uint32_t timeout_ms)
+{
+    claw_core_request_item_t wake = {0};
+    TickType_t deadline;
+
+    if (!core || !core->initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!core->started) {
+        return ESP_OK;
+    }
+
+    core->stop_requested = true;
+    (void)claw_core_cancel_request(core, 0);
+    if (xQueueSend(core->request_queue, &wake, 0) != pdTRUE) {
+        ESP_LOGW(core->log_tag, "Failed to enqueue stop wake item");
+    }
+
+    deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms ? timeout_ms : 5000);
+    while (core->started && xTaskGetTickCount() < deadline) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    if (core->started) {
+        ESP_LOGE(core->log_tag, "Stop timed out");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    return ESP_OK;
+}
+
 esp_err_t claw_core_destroy(claw_core_handle_t core)
 {
     if (!core || !core->initialized) {
         return ESP_ERR_INVALID_STATE;
     }
     if (core->started) {
-        ESP_LOGE(core->log_tag, "Destroy rejected for started core");
-        return ESP_ERR_INVALID_STATE;
+        esp_err_t err = claw_core_stop(core, 5000);
+
+        if (err != ESP_OK) {
+            ESP_LOGE(core->log_tag, "Destroy rejected: stop failed: %s", esp_err_to_name(err));
+            return err;
+        }
     }
 
     claw_core_free_runtime(core);

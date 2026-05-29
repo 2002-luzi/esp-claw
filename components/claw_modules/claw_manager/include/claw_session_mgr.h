@@ -60,6 +60,13 @@ esp_err_t claw_session_mgr_build_session_id(const claw_session_build_context_t *
                                             char *buf,
                                             size_t buf_size,
                                             size_t *out_len);
+esp_err_t claw_session_mgr_alloc_subagent_session_id(const char *parent_session_id,
+                                                     char *buf,
+                                                     size_t buf_size,
+                                                     size_t *out_len);
+esp_err_t claw_session_mgr_subagent_id_is_known(const char *parent_session_id,
+                                                const char *subagent_id,
+                                                bool *out_known);
 esp_err_t claw_session_mgr_new_chat_session(uint32_t agent_id,
                                             const char *source_channel,
                                             const char *chat_id,

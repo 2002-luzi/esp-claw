@@ -17,6 +17,7 @@
 #include <sys/types.h>
 
 #include "cJSON.h"
+#include "claw_agent_mgr.h"
 #include "claw_core.h"
 #include "claw_event_publisher.h"
 #include "claw_session_mgr.h"
@@ -37,7 +38,6 @@ static const char *TAG = "claw_event_router";
 #define CLAW_EVENT_ROUTER_DEFAULT_STACK            8192
 #define CLAW_EVENT_ROUTER_DEFAULT_PRIO               5
 #define CLAW_EVENT_ROUTER_DEFAULT_SUBMIT          1000
-#define CLAW_EVENT_ROUTER_DEFAULT_RECEIVE       130000
 #define CLAW_EVENT_ROUTER_ID_SIZE                  64
 #define CLAW_EVENT_ROUTER_DESC_SIZE               160
 #define CLAW_EVENT_ROUTER_ACK_SIZE                256
@@ -1667,6 +1667,8 @@ static esp_err_t claw_event_router_execute_cap_action(
 
     call_ctx.channel = event->source_channel;
     call_ctx.chat_id = event->chat_id;
+    call_ctx.target_channel = event->target_channel[0] ? event->target_channel : event->source_channel;
+    call_ctx.target_chat_id = event->target_endpoint[0] ? event->target_endpoint : event->chat_id;
     err = claw_event_router_prepare_session_id(event, session_id, sizeof(session_id), &session_id_len);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to build cap action session id: %s", esp_err_to_name(err));
@@ -1726,10 +1728,8 @@ static esp_err_t claw_event_router_execute_agent_action(
     const char *target_chat_id = NULL;
     const char *session_policy = NULL;
     claw_event_t agent_event = {0};
-    claw_core_request_t request = {0};
-    char session_id[CLAW_SESSION_MGR_ID_SIZE] = {0};
+    claw_agent_mgr_root_input_t agent_input = {0};
     char submit_output[32] = {0};
-    size_t session_id_len = 0;
     esp_err_t err;
 
     input_root = cJSON_Parse(action->input_json);
@@ -1753,49 +1753,35 @@ static esp_err_t claw_event_router_execute_agent_action(
         claw_event_router_parse_session_policy(session_policy, &agent_event.session_policy);
     }
 
-    err = claw_event_router_prepare_session_id(&agent_event,
-                                                       session_id,
-                                                       sizeof(session_id),
-                                                       &session_id_len);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to build agent request session id: %s", esp_err_to_name(err));
-        cJSON_Delete(rendered_input);
-        return err;
-    }
-    if (session_id_len > 0) {
-        request.session_id = session_id;
-    }
-    request.flags = CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE |
-                    CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE |
-                    CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT;
-    request.request_id = s_runtime->next_request_id++;
-    request.user_text = (text && text[0]) ? text : (event->text ? event->text : "");
-    request.source_channel = event->source_channel;
-    request.source_chat_id = event->chat_id;
-    request.source_sender_id = event->sender_id;
-    request.source_message_id = event->message_id;
-    request.source_cap = event->source_cap;
-    request.target_channel = (target_channel && target_channel[0]) ? target_channel : event->source_channel;
-    request.target_chat_id = (target_chat_id && target_chat_id[0]) ? target_chat_id : event->chat_id;
+    agent_input.session_policy = agent_event.session_policy;
+    agent_input.flags = CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE |
+                        CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE |
+                        CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE |
+                        CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT;
+    agent_input.request_id = s_runtime->next_request_id++;
+    agent_input.user_text = (text && text[0]) ? text : (event->text ? event->text : "");
+    agent_input.source_cap = event->source_cap;
+    agent_input.event_type = event->event_type;
+    agent_input.source_channel = event->source_channel;
+    agent_input.source_chat_id = event->chat_id;
+    agent_input.source_sender_id = event->sender_id;
+    agent_input.source_message_id = event->message_id;
+    agent_input.event_id = event->event_id;
+    agent_input.target_channel = (target_channel && target_channel[0]) ? target_channel : event->source_channel;
+    agent_input.target_chat_id = (target_chat_id && target_chat_id[0]) ? target_chat_id : event->chat_id;
 
-    if (!s_runtime->config.agent_submit) {
-        ESP_LOGE(TAG, "Agent submit callback is not configured");
-        err = ESP_ERR_INVALID_STATE;
-    } else {
-        err = s_runtime->config.agent_submit(&request,
-                                             s_runtime->config.agent_submit_timeout_ms,
-                                             s_runtime->config.agent_submit_user_ctx);
-    }
+    err = claw_agent_mgr_submit_root(&agent_input,
+                                     s_runtime->config.agent_submit_timeout_ms);
 
     if (err == ESP_OK) {
-        snprintf(submit_output, sizeof(submit_output), "request_id=%" PRIu32, request.request_id);
+        snprintf(submit_output, sizeof(submit_output), "request_id=%" PRIu32, agent_input.request_id);
         claw_event_router_update_last_output(ctx,
                                              "agent",
-                                             request.target_channel,
+                                             agent_input.target_channel,
                                              "submitted",
                                              submit_output);
     } else {
-        claw_event_router_update_last_output(ctx, "agent", request.target_channel, "error",
+        claw_event_router_update_last_output(ctx, "agent", agent_input.target_channel, "error",
                                              esp_err_to_name(err));
     }
 
@@ -1907,6 +1893,8 @@ static esp_err_t claw_event_router_execute_send_message_action(
     }
     call_ctx.channel = channel;
     call_ctx.chat_id = chat_id;
+    call_ctx.target_channel = channel;
+    call_ctx.target_chat_id = chat_id;
     call_ctx.source_cap = "claw_event_router";
     call_ctx.caller = CLAW_CAP_CALLER_SYSTEM;
     err = claw_cap_call(cap_name, payload, &call_ctx, output, sizeof(output));
@@ -2362,8 +2350,6 @@ esp_err_t claw_event_router_start(void)
     s_runtime->config.agent_submit_timeout_ms = s_runtime->config.agent_submit_timeout_ms ?
                                                 s_runtime->config.agent_submit_timeout_ms :
                                                 CLAW_EVENT_ROUTER_DEFAULT_SUBMIT;
-    s_runtime->config.core_receive_timeout_ms = s_runtime->config.core_receive_timeout_ms ?
-                                               s_runtime->config.core_receive_timeout_ms : CLAW_EVENT_ROUTER_DEFAULT_RECEIVE;
     s_runtime->stop_requested = false;
 
     task_ok = claw_task_create(&(claw_task_config_t){
