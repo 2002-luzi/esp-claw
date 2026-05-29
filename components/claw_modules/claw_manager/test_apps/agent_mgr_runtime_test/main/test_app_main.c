@@ -1028,7 +1028,7 @@ TEST_CASE("spawn send inspect and close subagent through root-only capability",
     TEST_ASSERT_EQUAL_STRING("chat:runtime:parent", info.parent_session_id);
     TEST_ASSERT_EQUAL_STRING("research", info.agent_type);
     TEST_ASSERT_TRUE(info.status == CLAW_AGENT_MGR_STATUS_RUNNING ||
-                     info.status == CLAW_AGENT_MGR_STATUS_COMPLETED);
+                     info.status == CLAW_AGENT_MGR_STATUS_IDLE);
 
     output = call_cap_and_dup_output("send_input",
                                      "{\"agent_id\":\"chat:runtime:parent:subagent_01\",\"input\":\"follow up\",\"interrupt\":false}",
@@ -1063,7 +1063,9 @@ TEST_CASE("closed known subagent can be resumed and invalid parent scoped ids fa
     claw_cap_call_context_t ctx = test_root_ctx("chat:resume:parent");
     claw_cap_call_context_t other_ctx = test_root_ctx("chat:resume:other");
     char agent_id[CLAW_SESSION_MGR_ID_SIZE] = {0};
+    char evict_id[CLAW_SESSION_MGR_ID_SIZE] = {0};
     char *output = NULL;
+    claw_agent_mgr_agent_info_t info = {0};
     bool known = false;
 
     ensure_runtime_ready();
@@ -1079,6 +1081,14 @@ TEST_CASE("closed known subagent can be resumed and invalid parent scoped ids fa
     TEST_ASSERT_EQUAL(ESP_OK, claw_agent_mgr_close_agent(&ctx, agent_id));
     TEST_ASSERT_EQUAL(ESP_OK, claw_session_mgr_subagent_id_is_known(ctx.session_id, agent_id, &known));
     TEST_ASSERT_TRUE(known);
+
+    spawn_direct_agent(&other_ctx, "reuse closed runtime slot", evict_id, sizeof(evict_id));
+    close_agent_if_set(&other_ctx, evict_id);
+    TEST_ASSERT_EQUAL(ESP_OK, claw_agent_mgr_inspect_agent(&ctx, agent_id, &info));
+    TEST_ASSERT_EQUAL_STRING(agent_id, info.agent_id);
+    TEST_ASSERT_EQUAL_STRING(agent_id, info.session_id);
+    TEST_ASSERT_EQUAL_STRING(ctx.session_id, info.parent_session_id);
+    TEST_ASSERT_EQUAL(CLAW_AGENT_MGR_STATUS_CLOSED, info.status);
 
     TEST_ASSERT_EQUAL(ESP_OK,
                       claw_agent_mgr_send_subagent_input(&ctx,

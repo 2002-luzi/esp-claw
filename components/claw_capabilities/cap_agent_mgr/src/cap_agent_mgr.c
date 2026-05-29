@@ -280,10 +280,10 @@ static const claw_cap_descriptor_t s_agent_mgr_caps[] = {
         .execute = cap_agent_mgr_spawn_execute,
     },
     {
-        .id = "send_input",
-        .name = "send_input",
+        .id = "send_agent_followup",
+        .name = "send_agent_followup",
         .family = "agent_mgr",
-        .description = "Send asynchronous input to a subagent.",
+        .description = "Continue delegating work to a subagent by sending a follow-up message. Use this to add new tasks, refine existing tasks, guide an active subagent, or leave instructions for a closed subagent.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM | CLAW_CAP_FLAG_ROOT_AGENT_ONLY,
         .input_schema_json = "{\"type\":\"object\",\"properties\":{\"agent_id\":{\"type\":\"string\"},\"input\":{\"type\":\"string\"},\"interrupt\":{\"type\":\"boolean\"}},\"required\":[\"agent_id\",\"input\"]}",

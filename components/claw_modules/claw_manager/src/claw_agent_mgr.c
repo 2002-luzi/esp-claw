@@ -386,7 +386,7 @@ static void claw_agent_mgr_completion_observer(const claw_core_completion_summar
         claw_agent_mgr_unlock();
         return;
     }
-    agent->status = CLAW_AGENT_MGR_STATUS_COMPLETED;
+    agent->status = CLAW_AGENT_MGR_STATUS_IDLE;
     agent->last_request_id = summary->request_id;
     root = claw_agent_mgr_find_locked(CLAW_AGENT_MGR_ROOT_AGENT_ID);
     if (root && root->core) {
@@ -691,6 +691,7 @@ esp_err_t claw_agent_mgr_inspect_agent(const claw_cap_call_context_t *ctx,
                                        claw_agent_mgr_agent_info_t *out_info)
 {
     claw_agent_mgr_agent_t *agent = NULL;
+    esp_err_t err = ESP_OK;
 
     if (!claw_agent_mgr_ctx_is_root_agent(ctx) || !agent_id || !out_info) {
         return ESP_ERR_INVALID_ARG;
@@ -698,6 +699,13 @@ esp_err_t claw_agent_mgr_inspect_agent(const claw_cap_call_context_t *ctx,
 
     claw_agent_mgr_lock();
     agent = claw_agent_mgr_find_locked(agent_id);
+    if (!agent && strcmp(agent_id, CLAW_AGENT_MGR_ROOT_AGENT_ID) != 0) {
+        err = claw_agent_mgr_find_or_lazy_create_subagent_locked(ctx, agent_id, &agent);
+        if (err != ESP_OK) {
+            claw_agent_mgr_unlock();
+            return err;
+        }
+    }
     if (!agent) {
         claw_agent_mgr_unlock();
         return ESP_ERR_NOT_FOUND;
