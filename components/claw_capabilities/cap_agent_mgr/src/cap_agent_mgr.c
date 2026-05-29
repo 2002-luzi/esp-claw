@@ -97,6 +97,7 @@ static esp_err_t cap_agent_mgr_send_input_execute(const char *input_json,
     const char *agent_id = NULL;
     const char *input = NULL;
     cJSON *interrupt_item = NULL;
+    char agent_id_copy[CLAW_SESSION_MGR_ID_SIZE] = {0};
     esp_err_t err;
 
     err = cap_agent_mgr_require_root(ctx, output, output_size);
@@ -118,9 +119,14 @@ static esp_err_t cap_agent_mgr_send_input_execute(const char *input_json,
         snprintf(output, output_size, "Error: missing agent_id or input.");
         return ESP_ERR_INVALID_ARG;
     }
+    if (strlcpy(agent_id_copy, agent_id, sizeof(agent_id_copy)) >= sizeof(agent_id_copy)) {
+        cJSON_Delete(root);
+        snprintf(output, output_size, "Error: agent_id is too long.");
+        return ESP_ERR_INVALID_SIZE;
+    }
 
     err = claw_agent_mgr_send_subagent_input(ctx,
-                                             agent_id,
+                                             agent_id_copy,
                                              input,
                                              cJSON_IsBool(interrupt_item) ? cJSON_IsTrue(interrupt_item) : false);
     cJSON_Delete(root);
@@ -128,7 +134,7 @@ static esp_err_t cap_agent_mgr_send_input_execute(const char *input_json,
         snprintf(output, output_size, "Error: send_input failed: %s", esp_err_to_name(err));
         return err;
     }
-    snprintf(output, output_size, "{\"agent_id\":\"%s\",\"status\":\"submitted\"}", agent_id);
+    snprintf(output, output_size, "{\"agent_id\":\"%s\",\"status\":\"submitted\"}", agent_id_copy);
     return ESP_OK;
 }
 
@@ -185,6 +191,7 @@ static esp_err_t cap_agent_mgr_close_execute(const char *input_json,
 {
     cJSON *root = NULL;
     const char *agent_id = NULL;
+    char agent_id_copy[CLAW_SESSION_MGR_ID_SIZE] = {0};
     esp_err_t err;
 
     err = cap_agent_mgr_require_root(ctx, output, output_size);
@@ -204,13 +211,18 @@ static esp_err_t cap_agent_mgr_close_execute(const char *input_json,
         snprintf(output, output_size, "Error: missing agent_id.");
         return ESP_ERR_INVALID_ARG;
     }
-    err = claw_agent_mgr_close_agent(ctx, agent_id);
+    if (strlcpy(agent_id_copy, agent_id, sizeof(agent_id_copy)) >= sizeof(agent_id_copy)) {
+        cJSON_Delete(root);
+        snprintf(output, output_size, "Error: agent_id is too long.");
+        return ESP_ERR_INVALID_SIZE;
+    }
+    err = claw_agent_mgr_close_agent(ctx, agent_id_copy);
     cJSON_Delete(root);
     if (err != ESP_OK) {
         snprintf(output, output_size, "Error: close_agent failed: %s", esp_err_to_name(err));
         return err;
     }
-    snprintf(output, output_size, "{\"agent_id\":\"%s\",\"status\":\"closed\"}", agent_id);
+    snprintf(output, output_size, "{\"agent_id\":\"%s\",\"status\":\"closed\"}", agent_id_copy);
     return ESP_OK;
 }
 

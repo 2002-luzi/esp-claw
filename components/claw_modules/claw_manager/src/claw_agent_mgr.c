@@ -43,6 +43,7 @@ typedef struct {
     char parent_target_channel[16];
     char parent_target_chat_id[96];
     bool background;
+    bool closing;
     claw_core_handle_t core;
     claw_cap_core_call_user_ctx_t cap_user_ctx;
     uint32_t last_request_id;
@@ -121,7 +122,10 @@ static claw_agent_mgr_agent_t *claw_agent_mgr_alloc_locked(claw_agent_mgr_role_t
         return s_mgr.agents[0].occupied ? NULL : &s_mgr.agents[0];
     }
     for (size_t i = start; i < CLAW_AGENT_MGR_MAX_AGENTS; i++) {
-        if (!s_mgr.agents[i].occupied) {
+        if (!s_mgr.agents[i].occupied ||
+                (s_mgr.agents[i].role == CLAW_AGENT_MGR_ROLE_SUBAGENT &&
+                 s_mgr.agents[i].status == CLAW_AGENT_MGR_STATUS_CLOSED &&
+                 !s_mgr.agents[i].core && !s_mgr.agents[i].closing)) {
             return &s_mgr.agents[i];
         }
     }
@@ -378,6 +382,10 @@ static void claw_agent_mgr_completion_observer(const claw_core_completion_summar
     }
 
     claw_agent_mgr_lock();
+    if (agent->closing) {
+        claw_agent_mgr_unlock();
+        return;
+    }
     agent->status = CLAW_AGENT_MGR_STATUS_COMPLETED;
     agent->last_request_id = summary->request_id;
     root = claw_agent_mgr_find_locked(CLAW_AGENT_MGR_ROOT_AGENT_ID);
@@ -500,6 +508,9 @@ static esp_err_t claw_agent_mgr_start_subagent_locked(claw_agent_mgr_agent_t *ag
     }
     if (agent->core) {
         return ESP_OK;
+    }
+    if (agent->closing) {
+        return ESP_ERR_INVALID_STATE;
     }
     return claw_agent_mgr_start_agent_core(agent);
 }
@@ -724,13 +735,30 @@ esp_err_t claw_agent_mgr_close_agent(const claw_cap_call_context_t *ctx,
         return ESP_ERR_NOT_FOUND;
     }
     core = agent->core;
+    if (!core) {
+        agent->status = CLAW_AGENT_MGR_STATUS_CLOSED;
+        claw_agent_mgr_unlock();
+        return ESP_OK;
+    }
     agent->core = NULL;
     agent->status = CLAW_AGENT_MGR_STATUS_CLOSED;
+    agent->closing = true;
     claw_agent_mgr_unlock();
 
-    if (core) {
-        err = claw_core_destroy(core);
+    err = claw_core_destroy(core);
+
+    claw_agent_mgr_lock();
+    agent = claw_agent_mgr_find_locked(agent_id);
+    if (agent && agent->closing && !agent->core) {
+        agent->closing = false;
+        if (err != ESP_OK) {
+            agent->status = CLAW_AGENT_MGR_STATUS_ERROR;
+            snprintf(agent->last_error, sizeof(agent->last_error), "%s", esp_err_to_name(err));
+        } else {
+            agent->status = CLAW_AGENT_MGR_STATUS_CLOSED;
+        }
     }
+    claw_agent_mgr_unlock();
     return err;
 }
 

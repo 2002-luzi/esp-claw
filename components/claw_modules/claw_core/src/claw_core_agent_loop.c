@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "claw_core_internal.h"
+#include "claw_task.h"
 
 #include <inttypes.h>
 #include <stdlib.h>
@@ -487,8 +488,8 @@ finish_request:
         claw_core_free_request_item(&request);
     }
 
+    ESP_LOGI(core->log_tag, "Stopped worker task");
     core->task_handle = NULL;
     core->started = false;
-    ESP_LOGI(core->log_tag, "Stopped worker task");
-    vTaskDelete(NULL);
+    claw_task_delete(NULL);
 }
