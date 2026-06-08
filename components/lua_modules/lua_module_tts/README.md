@@ -1,35 +1,72 @@
-# Lua TTS
+# Lua API: TTS
 
-This module exposes text-to-speech playback to Lua.
+Use this module when a Lua script needs to synthesize speech and play it
+through the board audio output. Service credentials and default provider
+parameters are managed by the device, so scripts should only choose playback
+behavior and per-request speech overrides.
 
-## How to call
-- Import it with `local tts = require("tts")`
-- Call `tts.init(opts)` to initialize the audio output from board manager. By default it uses `audio_dac`.
-- Call `tts.play("text")` to request speech from the configured provider and play it through the speaker.
-- Call `tts.close()` when TTS is no longer needed.
-- `tts.tts_init` and `tts.tts_play` are aliases for scripts that prefer explicit names.
+## Import
 
-## Options
-Provider settings are device configuration, not script-local options. Configure
-the TTS provider, API key, base URL, model, voice, and timeout from the web
-settings UI before running scripts.
+```lua
+local tts = require("tts")
+```
 
-`tts.init(opts)` and `tts.play(text, opts)` accept only runtime playback
-controls:
+## Functions
+
+### `tts.init(opts)`
+
+Initializes the audio output. This is optional because `tts.play()` initializes
+on first use, but call it explicitly when the script needs to choose the audio
+device or volume before playback.
+
 - `audio_device` or `device`: board manager audio output device, defaults to `audio_dac`.
 - `volume`: output volume, 0..100, defaults to 80.
 - `timeout_ms`: HTTP timeout, defaults to the configured `tts_timeout_ms`.
-- `style`: optional provider-specific style instruction for the current request.
+
+Returns `true` on success, or `nil, err` on failure.
+
+### `tts.play(text, opts)`
+
+Synthesizes `text`, streams the returned PCM to the speaker, and returns a
+result table:
+
+```lua
+{
+    ok = true,
+    audio_bytes = 1234,
+    http_bytes = 5678,
+}
+```
+
+`opts` accepts the same runtime playback controls as `tts.init()`. When audio
+has already been initialized, changing `audio_device`, `device`, or `volume`
+from `tts.play()` returns an error; use `tts.init()` first for those.
+
+`tts.play()` also accepts per-request speech controls:
+
+- `voice`: optional provider voice override for the current request.
+- `style`: optional provider-specific style instruction for the current request, up to 512 characters.
+
+Returns `result` on success, or `nil, err` on failure.
+
+### `tts.close()`
+
+Closes the audio output and releases module runtime state. Returns `true`.
+
+### Aliases
+
+`tts.tts_init` is an alias for `tts.init`.
+`tts.tts_play` is an alias for `tts.play`.
+
+## Script Boundaries
 
 Passing service configuration options such as `provider`, `api_key`,
-`base_url`, `model`, or `voice` from Lua returns an error. These values must be
-stored in the device settings.
-
-The module reads persisted settings from:
-`tts_provider`, `tts_api_key`, `tts_base_url`, `tts_model`, `tts_voice`, and
-`tts_timeout_ms`.
+`base_url`, `model`, `appid`, `app_id`, `access_token`, `token`, `cluster`,
+`speaker`, or `resource_id` from Lua returns an error. Agents should not ask
+users for provider credentials in Lua scripts.
 
 ## Example
+
 ```lua
 local tts = require("tts")
 
@@ -39,6 +76,12 @@ assert(tts.init({
 
 local result = assert(tts.play("hello from ESP-Claw"))
 print("played bytes:", result.audio_bytes)
+
+local lively = assert(tts.play("hello again", {
+    voice = "default",
+    style = "Speak warmly and naturally.",
+}))
+print("played bytes:", lively.audio_bytes)
 
 tts.close()
 ```

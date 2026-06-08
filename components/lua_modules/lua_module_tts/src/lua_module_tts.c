@@ -31,6 +31,7 @@
 #define TTS_DEFAULT_TIMEOUT_MS      120000
 #define TTS_CONFIG_STR_LEN          320
 #define TTS_SHORT_STR_LEN           64
+#define TTS_STYLE_MAX_CHARS         512
 #define TTS_CHUNK_MS                60
 
 static const char *TAG = "lua_tts";
@@ -42,7 +43,7 @@ typedef struct {
     char base_url[TTS_CONFIG_STR_LEN];
     char model[TTS_SHORT_STR_LEN];
     char voice[TTS_SHORT_STR_LEN];
-    char style[TTS_CONFIG_STR_LEN];
+    char *style;
     uint32_t timeout_ms;
     int volume;
     bool initialized;
@@ -179,7 +180,6 @@ static const char *lua_tts_find_config_field(lua_State *L, int table_idx)
         "api_key",
         "base_url",
         "model",
-        "voice",
         "appid",
         "app_id",
         "access_token",
@@ -235,6 +235,15 @@ static int lua_tts_push_config_field_err(lua_State *L, int opts_idx, const char 
     return 2;
 }
 
+static void lua_tts_free_runtime_dynamic(lua_tts_runtime_t *cfg)
+{
+    if (!cfg) {
+        return;
+    }
+    free(cfg->style);
+    cfg->style = NULL;
+}
+
 static esp_err_t lua_tts_copy_field(lua_State *L, int table_idx,
                                     const char *field,
                                     char *dst,
@@ -256,6 +265,83 @@ static esp_err_t lua_tts_copy_field(lua_State *L, int table_idx,
         } else {
             memcpy(dst, value, len);
             dst[len] = '\0';
+        }
+    }
+    lua_pop(L, 1);
+    return err;
+}
+
+static esp_err_t lua_tts_utf8_check_char_limit(const char *value, size_t len, size_t max_chars)
+{
+    size_t offset = 0;
+    size_t chars = 0;
+
+    while (offset < len) {
+        uint8_t c = (uint8_t)value[offset];
+        size_t seq_len = 0;
+
+        if (c < 0x80) {
+            seq_len = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            seq_len = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            seq_len = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            seq_len = 4;
+        } else {
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        if (seq_len == 0 || offset + seq_len > len) {
+            return ESP_ERR_INVALID_ARG;
+        }
+        for (size_t i = 1; i < seq_len; i++) {
+            if (((uint8_t)value[offset + i] & 0xC0) != 0x80) {
+                return ESP_ERR_INVALID_ARG;
+            }
+        }
+
+        chars++;
+        if (chars > max_chars) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        offset += seq_len;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t lua_tts_style_field(lua_State *L, int table_idx, lua_tts_runtime_t *cfg)
+{
+    esp_err_t err = ESP_OK;
+
+    lua_getfield(L, table_idx, "style");
+    if (!lua_isnil(L, -1)) {
+        size_t len = 0;
+        const char *value = NULL;
+        char *copy = NULL;
+
+        if (!lua_isstring(L, -1)) {
+            lua_pop(L, 1);
+            return ESP_ERR_INVALID_ARG;
+        }
+        value = lua_tolstring(L, -1, &len);
+        err = lua_tts_utf8_check_char_limit(value, len, TTS_STYLE_MAX_CHARS);
+        if (err != ESP_OK) {
+            /* Keep the previous style value unchanged on validation failure. */
+        } else if (len == 0) {
+            free(cfg->style);
+            cfg->style = NULL;
+        } else {
+            copy = malloc(len + 1);
+            if (!copy) {
+                err = ESP_ERR_NO_MEM;
+            } else {
+                memcpy(copy, value, len);
+                copy[len] = '\0';
+                free(cfg->style);
+                cfg->style = copy;
+            }
         }
     }
     lua_pop(L, 1);
@@ -312,7 +398,26 @@ static esp_err_t lua_tts_int_field(lua_State *L, int table_idx,
     return err;
 }
 
-static esp_err_t lua_tts_apply_opts(lua_State *L, int opts_idx, lua_tts_runtime_t *cfg)
+static esp_err_t lua_tts_reject_play_only_fields(lua_State *L, int table_idx)
+{
+    static const char *const fields[] = {
+        "voice",
+        "style",
+    };
+
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        if (lua_tts_has_field(L, table_idx, fields[i])) {
+            ESP_LOGE(TAG, "TTS option '%s' is only supported by tts.play()", fields[i]);
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t lua_tts_apply_runtime_opts(lua_State *L,
+                                            int opts_idx,
+                                            lua_tts_runtime_t *cfg)
 {
     if (opts_idx == 0 || lua_isnoneornil(L, opts_idx)) {
         return ESP_OK;
@@ -338,8 +443,6 @@ static esp_err_t lua_tts_apply_opts(lua_State *L, int opts_idx, lua_tts_runtime_
     lua_pop(L, 1);
     ESP_RETURN_ON_ERROR(lua_tts_copy_field(L, opts_idx, "device", cfg->audio_device, sizeof(cfg->audio_device)),
                         TAG, "device too long");
-    ESP_RETURN_ON_ERROR(lua_tts_copy_field(L, opts_idx, "style", cfg->style, sizeof(cfg->style)),
-                        TAG, "style too long");
     ESP_RETURN_ON_ERROR(lua_tts_u32_field(L, opts_idx, "timeout_ms", &cfg->timeout_ms),
                         TAG, "invalid timeout_ms");
     lua_getfield(L, opts_idx, "volume");
@@ -349,6 +452,44 @@ static esp_err_t lua_tts_apply_opts(lua_State *L, int opts_idx, lua_tts_runtime_
     lua_pop(L, 1);
     ESP_RETURN_ON_ERROR(lua_tts_int_field(L, opts_idx, "volume", &cfg->volume, 0, 100),
                         TAG, "invalid volume");
+    return ESP_OK;
+}
+
+static esp_err_t lua_tts_apply_init_opts(lua_State *L,
+                                         int opts_idx,
+                                         lua_tts_runtime_t *cfg)
+{
+    if (opts_idx == 0 || lua_isnoneornil(L, opts_idx)) {
+        return ESP_OK;
+    }
+    if (!lua_istable(L, opts_idx)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    opts_idx = lua_absindex(L, opts_idx);
+
+    ESP_RETURN_ON_ERROR(lua_tts_reject_play_only_fields(L, opts_idx),
+                        TAG, "play-only TTS options passed to init");
+    return lua_tts_apply_runtime_opts(L, opts_idx, cfg);
+}
+
+static esp_err_t lua_tts_apply_play_opts(lua_State *L,
+                                         int opts_idx,
+                                         lua_tts_runtime_t *cfg)
+{
+    if (opts_idx == 0 || lua_isnoneornil(L, opts_idx)) {
+        return ESP_OK;
+    }
+    if (!lua_istable(L, opts_idx)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    opts_idx = lua_absindex(L, opts_idx);
+
+    ESP_RETURN_ON_ERROR(lua_tts_apply_runtime_opts(L, opts_idx, cfg),
+                        TAG, "invalid runtime TTS options");
+    ESP_RETURN_ON_ERROR(lua_tts_copy_field(L, opts_idx, "voice", cfg->voice, sizeof(cfg->voice)),
+                        TAG, "voice too long");
+    ESP_RETURN_ON_ERROR(lua_tts_style_field(L, opts_idx, cfg),
+                        TAG, "style too long");
     return ESP_OK;
 }
 
@@ -460,31 +601,55 @@ static void lua_tts_runtime_close_locked(void)
     if (s_tts.initialized && s_tts.codec_dev) {
         esp_codec_dev_close(s_tts.codec_dev);
     }
+    lua_tts_free_runtime_dynamic(&s_tts);
     memset(&s_tts, 0, sizeof(s_tts));
 }
 
+static esp_err_t lua_tts_runtime_init_with_opts_locked(lua_State *L, int opts_idx, bool reject_play_only);
+
 static esp_err_t lua_tts_runtime_init_locked(lua_State *L, int opts_idx)
+{
+    return lua_tts_runtime_init_with_opts_locked(L, opts_idx, true);
+}
+
+static esp_err_t lua_tts_runtime_auto_init_locked(lua_State *L, int opts_idx)
+{
+    return lua_tts_runtime_init_with_opts_locked(L, opts_idx, false);
+}
+
+static esp_err_t lua_tts_runtime_init_with_opts_locked(lua_State *L, int opts_idx, bool reject_play_only)
 {
     lua_tts_runtime_t cfg = {0};
     const tts_provider_t *provider = NULL;
     esp_err_t err;
 
     lua_tts_load_defaults(&cfg);
-    ESP_RETURN_ON_ERROR(lua_tts_apply_opts(L, opts_idx, &cfg), TAG, "invalid TTS options");
+    if (reject_play_only) {
+        err = lua_tts_apply_init_opts(L, opts_idx, &cfg);
+    } else {
+        err = lua_tts_apply_runtime_opts(L, opts_idx, &cfg);
+    }
+    if (err != ESP_OK) {
+        lua_tts_free_runtime_dynamic(&cfg);
+        return err;
+    }
 
     provider = tts_provider_find(cfg.provider);
     if (!provider) {
+        lua_tts_free_runtime_dynamic(&cfg);
         return ESP_ERR_NOT_FOUND;
     }
 
     err = lua_tts_get_board_audio_output(&cfg);
     if (err != ESP_OK) {
+        lua_tts_free_runtime_dynamic(&cfg);
         return err;
     }
 
     lua_tts_runtime_close_locked();
     err = lua_tts_open_codec(&cfg);
     if (err != ESP_OK) {
+        lua_tts_free_runtime_dynamic(&cfg);
         return err;
     }
 
@@ -616,8 +781,9 @@ static esp_err_t lua_tts_build_effective_config(lua_State *L,
                                                 lua_tts_runtime_t *cfg)
 {
     *cfg = s_tts;
+    cfg->style = NULL;
     cfg->override_audio = false;
-    return lua_tts_apply_opts(L, opts_idx, cfg);
+    return lua_tts_apply_play_opts(L, opts_idx, cfg);
 }
 
 static int lua_tts_init(lua_State *L)
@@ -675,7 +841,7 @@ static int lua_tts_play(lua_State *L)
     lua_tts_lock();
     was_initialized = s_tts.initialized;
     if (!s_tts.initialized) {
-        err = lua_tts_runtime_init_locked(L, opts_idx);
+        err = lua_tts_runtime_auto_init_locked(L, opts_idx);
         if (err != ESP_OK) {
             lua_tts_unlock();
             return lua_tts_push_err(L, err, "tts init");
@@ -685,27 +851,32 @@ static int lua_tts_play(lua_State *L)
     err = lua_tts_build_effective_config(L, opts_idx, &cfg);
     if (err != ESP_OK) {
         lua_tts_unlock();
+        lua_tts_free_runtime_dynamic(&cfg);
         return lua_tts_push_err(L, err, "tts play options");
     }
     if (cfg.override_audio && was_initialized) {
         lua_tts_unlock();
+        lua_tts_free_runtime_dynamic(&cfg);
         return lua_tts_push_err(L, ESP_ERR_INVALID_ARG,
                                 "tts play: use tts.init() to change audio_device or volume");
     }
     if (cfg.api_key[0] == '\0') {
         lua_tts_unlock();
+        lua_tts_free_runtime_dynamic(&cfg);
         return lua_tts_push_err(L, ESP_ERR_INVALID_ARG, "tts play: api_key is required");
     }
 
     provider = tts_provider_find(cfg.provider);
     if (!provider) {
         lua_tts_unlock();
+        lua_tts_free_runtime_dynamic(&cfg);
         return lua_tts_push_err(L, ESP_ERR_NOT_FOUND, "tts play provider");
     }
 
     err = lua_tts_sink_init(&sink, &s_tts, provider->audio_format);
     if (err != ESP_OK) {
         lua_tts_unlock();
+        lua_tts_free_runtime_dynamic(&cfg);
         return lua_tts_push_err(L, err, "tts audio sink");
     }
 
@@ -728,6 +899,7 @@ static int lua_tts_play(lua_State *L)
     size_t audio_bytes = sink.audio_bytes_written;
     size_t http_bytes = stream.http_bytes;
     lua_tts_sink_deinit(&sink);
+    lua_tts_free_runtime_dynamic(&cfg);
     lua_tts_unlock();
 
     if (err != ESP_OK) {

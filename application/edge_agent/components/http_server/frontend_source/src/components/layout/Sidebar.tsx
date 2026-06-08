@@ -9,12 +9,10 @@ import {
   Search,
   Settings,
   SquareFunction,
-  Volume2,
   WifiPen,
 } from 'lucide-solid';
 import { createMemo, createSignal, For, Show, type Component } from 'solid-js';
 import { t } from '../../i18n';
-import { appLuaModules } from '../../state/config';
 import { isDirty, type TabId } from '../../state/dirty';
 import { StatusSummary } from './StatusBar';
 
@@ -24,7 +22,6 @@ const IconStatus: Component = () => <Activity class={iconClass} />;
 const IconGear: Component = () => <Settings class={iconClass} />;
 const IconWifi: Component = () => <WifiPen class={iconClass} />;
 const IconLlm: Component = () => <Bot class={iconClass} />;
-const IconTts: Component = () => <Volume2 class={iconClass} />;
 const IconIm: Component = () => <MessageSquareCode class={iconClass} />;
 const IconSearch: Component = () => <Search class={iconClass} />;
 const IconMemory: Component = () => <DatabaseZap class={iconClass} />;
@@ -40,7 +37,6 @@ export type LeafNode = {
     | 'navStatus'
     | 'navBasic'
     | 'navLlm'
-    | 'navTts'
     | 'navIm'
     | 'navWebReq'
     | 'navMemory'
@@ -85,7 +81,6 @@ export const NAV_TREE: NavNode[] = [
     icon: IconSkills,
     children: [
       { kind: 'leaf', id: 'skills', labelKey: 'navLuaModuleSelection', icon: IconSkills },
-      { kind: 'leaf', id: 'tts', labelKey: 'navTts', icon: IconTts, visible: isTtsModuleAvailable },
     ],
   },
   { kind: 'leaf', id: 'files', labelKey: 'navFiles', icon: IconFiles },
@@ -104,10 +99,6 @@ function collectLeafIds(nodes: NavNode[]): TabId[] {
 
 function isNodeVisible(node: LeafNode): boolean {
   return node.visible ? node.visible() : true;
-}
-
-function isTtsModuleAvailable(): boolean {
-  return appLuaModules().some((item) => item.module_id === 'tts');
 }
 
 function groupContains(group: GroupNode, id: TabId): boolean {
