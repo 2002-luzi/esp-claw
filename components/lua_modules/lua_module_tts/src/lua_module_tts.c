@@ -23,6 +23,11 @@
 #include "settings_store.h"
 #include "tts_provider.h"
 
+#ifdef CONFIG_LUA_TTS_MEMORY_PROFILING
+#include "esp_heap_caps.h"
+#include "freertos/task.h"
+#endif
+
 #define LUA_MODULE_TTS_NAME         "tts"
 #define TTS_DEFAULT_PROVIDER        "xiao_mimo"
 #define TTS_DEFAULT_DEVICE          "audio_dac"
@@ -58,11 +63,30 @@ typedef struct {
     size_t in_len;
     size_t in_cap;
     size_t audio_bytes_written;
+    bool first_convert_logged;
 } lua_tts_audio_sink_t;
 
 static lua_tts_runtime_t s_tts;
 static SemaphoreHandle_t s_tts_mutex;
 static portMUX_TYPE s_tts_mutex_init_mux = portMUX_INITIALIZER_UNLOCKED;
+
+#ifdef CONFIG_LUA_TTS_MEMORY_PROFILING
+static void lua_tts_log_mem_checkpoint(const char *mark)
+{
+    ESP_LOGI(TAG,
+             "[mem] %s free_8bit=%u min_8bit=%u largest_8bit=%u internal_free=%u psram_free=%u stack_hwm_words=%u",
+             mark,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+}
+#define LUA_TTS_MEM_CHECKPOINT(mark) lua_tts_log_mem_checkpoint(mark)
+#else
+#define LUA_TTS_MEM_CHECKPOINT(mark) do { (void)(mark); } while (0)
+#endif
 
 static void lua_tts_lock(void)
 {
@@ -412,6 +436,10 @@ static esp_err_t lua_tts_sink_flush(lua_tts_audio_sink_t *sink)
     }
     ESP_RETURN_ON_ERROR(audio_converter_process(&sink->converter, sink->in_buf, (uint32_t)sink->in_len, &out, &out_len),
                         TAG, "failed to convert TTS PCM");
+    if (!sink->first_convert_logged) {
+        sink->first_convert_logged = true;
+        LUA_TTS_MEM_CHECKPOINT("after first audio_converter_process");
+    }
     sink->in_len = 0;
     if (out_len == 0) {
         return ESP_OK;
@@ -534,6 +562,7 @@ static int lua_tts_close(lua_State *L)
     (void)L;
     lua_tts_lock();
     lua_tts_runtime_close_locked();
+    LUA_TTS_MEM_CHECKPOINT("after tts.close");
     lua_tts_unlock();
     lua_pushboolean(L, 1);
     return 1;
@@ -553,6 +582,8 @@ static int lua_tts_play(lua_State *L)
     if (text[0] == '\0') {
         return lua_tts_push_err(L, ESP_ERR_INVALID_ARG, "tts play: text is empty");
     }
+
+    LUA_TTS_MEM_CHECKPOINT("lua_tts_play entry");
 
     lua_tts_lock();
     was_initialized = s_tts.initialized;
@@ -590,6 +621,7 @@ static int lua_tts_play(lua_State *L)
         lua_tts_unlock();
         return lua_tts_push_err(L, err, "tts audio sink");
     }
+    LUA_TTS_MEM_CHECKPOINT("after lua_tts_sink_init");
 
     tts_provider_config_t provider_cfg = {
         .api_key = cfg.api_key,
@@ -603,6 +635,7 @@ static int lua_tts_play(lua_State *L)
     stream.write_ctx = &sink;
 
     err = provider->play(&provider_cfg, text, &stream);
+    LUA_TTS_MEM_CHECKPOINT("after provider->play");
     if (err == ESP_OK) {
         err = lua_tts_sink_flush(&sink);
     }
@@ -610,6 +643,7 @@ static int lua_tts_play(lua_State *L)
     size_t audio_bytes = sink.audio_bytes_written;
     size_t http_bytes = stream.http_bytes;
     lua_tts_sink_deinit(&sink);
+    LUA_TTS_MEM_CHECKPOINT("after lua_tts_sink_deinit");
     lua_tts_unlock();
 
     if (err != ESP_OK) {

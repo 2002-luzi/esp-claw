@@ -18,6 +18,12 @@
 #include "esp_log.h"
 #include "mbedtls/base64.h"
 
+#ifdef CONFIG_LUA_TTS_MEMORY_PROFILING
+#include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#endif
+
 static const char *TAG = "tts_mimo";
 
 #define MIMO_DEFAULT_BASE_URL   "https://api.xiaomimimo.com/v1"
@@ -27,6 +33,24 @@ static const char *TAG = "tts_mimo";
 #define MIMO_DEFAULT_TIMEOUT_MS 120000
 #define MIMO_READ_BUF_SIZE      512
 #define MIMO_B64_QUARTET        4
+
+#ifdef CONFIG_LUA_TTS_MEMORY_PROFILING
+static void mimo_log_mem_checkpoint(const char *mark)
+{
+    ESP_LOGI(TAG,
+             "[mem] %s free_8bit=%u min_8bit=%u largest_8bit=%u internal_free=%u psram_free=%u stack_hwm_words=%u",
+             mark,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)uxTaskGetStackHighWaterMark(NULL));
+}
+#define MIMO_MEM_CHECKPOINT(mark) mimo_log_mem_checkpoint(mark)
+#else
+#define MIMO_MEM_CHECKPOINT(mark) do { (void)(mark); } while (0)
+#endif
 
 static const tts_audio_format_t s_mimo_audio_format = {
     .sample_rate_hz = 24000,
@@ -510,6 +534,7 @@ static esp_err_t mimo_play(const tts_provider_config_t *config,
         free(body);
         return ESP_ERR_NO_MEM;
     }
+    MIMO_MEM_CHECKPOINT("after esp_http_client_init");
 
     esp_http_client_set_method(client, HTTP_METHOD_POST);
     esp_http_client_set_header(client, "Authorization", auth);
@@ -517,6 +542,7 @@ static esp_err_t mimo_play(const tts_provider_config_t *config,
     esp_http_client_set_header(client, "Accept", "text/event-stream");
 
     err = esp_http_client_open(client, (int)body_len);
+    MIMO_MEM_CHECKPOINT("after esp_http_client_open");
     if (err == ESP_OK) {
         int written = esp_http_client_write(client, body, (int)body_len);
         if (written < 0 || written != (int)body_len) {

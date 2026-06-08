@@ -1,0 +1,12 @@
+menu "Lua TTS module"
+
+config LUA_TTS_MEMORY_PROFILING
+    bool "Enable Lua TTS memory profiling logs"
+    default n
+    help
+        Enable detailed heap and current-task stack high-water logs around Lua
+        TTS playback, HTTP/TLS setup, audio conversion, and cleanup checkpoints.
+        Keep this disabled for normal firmware builds because it adds verbose
+        diagnostic logs.
+
+endmenu
