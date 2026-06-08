@@ -42,14 +42,16 @@ export type LeafNode = {
     | 'navMemory'
     | 'navCapabilities'
     | 'navLuaModules'
+    | 'navLuaModuleSelection'
     | 'navFiles'
     | 'navWebIm';
   icon: Component;
+  visible?: () => boolean;
 };
 export type GroupNode = {
   kind: 'group';
   id: string;
-  labelKey: 'navSystemSettings';
+  labelKey: 'navSystemSettings' | 'navLuaModules';
   icon: Component;
   children: LeafNode[];
 };
@@ -72,7 +74,15 @@ export const NAV_TREE: NavNode[] = [
   { kind: 'leaf', id: 'memory', labelKey: 'navMemory', icon: IconMemory },
   { kind: 'leaf', id: 'webim', labelKey: 'navWebIm', icon: IconWebIm },
   { kind: 'leaf', id: 'capabilities', labelKey: 'navCapabilities', icon: IconCaps },
-  { kind: 'leaf', id: 'skills', labelKey: 'navLuaModules', icon: IconSkills },
+  {
+    kind: 'group',
+    id: 'lua-modules',
+    labelKey: 'navLuaModules',
+    icon: IconSkills,
+    children: [
+      { kind: 'leaf', id: 'skills', labelKey: 'navLuaModuleSelection', icon: IconSkills },
+    ],
+  },
   { kind: 'leaf', id: 'files', labelKey: 'navFiles', icon: IconFiles },
 ];
 
@@ -87,12 +97,16 @@ function collectLeafIds(nodes: NavNode[]): TabId[] {
   return out;
 }
 
+function isNodeVisible(node: LeafNode): boolean {
+  return node.visible ? node.visible() : true;
+}
+
 function groupContains(group: GroupNode, id: TabId): boolean {
-  return group.children.some((child) => child.id === id);
+  return group.children.some((child) => isNodeVisible(child) && child.id === id);
 }
 
 function groupDirty(group: GroupNode): boolean {
-  return group.children.some((child) => isDirty(child.id));
+  return group.children.some((child) => isNodeVisible(child) && isDirty(child.id));
 }
 
 type SidebarProps = {
@@ -118,7 +132,7 @@ function readExpanded(): Set<string> {
   } catch {
     /* ignore */
   }
-  return new Set(['basic-settings']);
+  return new Set(['basic-settings', 'lua-modules']);
 }
 
 export const Sidebar: Component<SidebarProps> = (props) => {
@@ -257,7 +271,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
         </button>
         <Show when={!isCollapsed() && isOpen()}>
           <ul class="flex flex-col gap-0.5 mt-0.5">
-            <For each={group.children}>
+            <For each={group.children.filter(isNodeVisible)}>
               {(leaf) => <li>{renderLeaf(leaf, { indent: true })}</li>}
             </For>
           </ul>

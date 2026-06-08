@@ -23,6 +23,7 @@ export const en = {
   navMemory: 'Memory',
   navCapabilities: 'Capabilities',
   navLuaModules: 'Lua Modules',
+  navLuaModuleSelection: 'Module Selection',
   navFiles: 'Files',
   navWebIm: 'Web Chat',
 
@@ -135,6 +136,22 @@ export const en = {
   llmValidationRequiredFields: 'Complete required LLM fields before saving: {fields}.',
   llmValidationMaxTokens: 'Max Tokens must be a positive integer.',
   llmValidationImageMaxBytes: 'Default Image Max Bytes must be a positive integer.',
+
+  sectionTtsProvider: 'Provider',
+  ttsProvider: 'TTS Provider',
+  ttsProviderXiaoMimo: 'Xiao MiMo',
+  ttsApiKey: 'API Key',
+  ttsModel: 'Model',
+  ttsModelPlaceholder: 'mimo-v2.5-tts',
+  ttsVoice: 'Voice',
+  ttsVoicePlaceholder: 'mimo_default',
+  ttsProviderNote:
+    'Lua scripts use this module configuration by default. Additional providers will appear here after their firmware provider is implemented.',
+  ttsAdvanced: 'TTS Advanced Options',
+  ttsBaseUrl: 'Base URL',
+  ttsBaseUrlPlaceholder: 'https://api.xiaomimimo.com/v1',
+  ttsTimeout: 'Timeout (ms)',
+  ttsTimeoutPlaceholder: '120000',
 
   sectionIm: 'Instant Messaging (IM)',
   imAdd: 'Add',

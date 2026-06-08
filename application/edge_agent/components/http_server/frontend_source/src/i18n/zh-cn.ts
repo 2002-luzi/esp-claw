@@ -25,6 +25,7 @@ export const zhCn: Dict = {
   navMemory: '记忆管理',
   navCapabilities: 'Capabilities 管理',
   navLuaModules: 'Lua 模块管理',
+  navLuaModuleSelection: '模块选择',
   navFiles: '文件管理',
   navWebIm: '在线聊天',
 
@@ -133,6 +134,22 @@ export const zhCn: Dict = {
   llmValidationRequiredFields: '保存前请补全 LLM 必填项：{fields}。',
   llmValidationMaxTokens: '最大 Token 数必须是正整数。',
   llmValidationImageMaxBytes: '默认图片大小上限必须是正整数。',
+
+  sectionTtsProvider: '服务提供商',
+  ttsProvider: 'TTS 服务商',
+  ttsProviderXiaoMimo: '小米 MiMo',
+  ttsApiKey: 'API 密钥',
+  ttsModel: '模型',
+  ttsModelPlaceholder: 'mimo-v2.5-tts',
+  ttsVoice: '音色',
+  ttsVoicePlaceholder: 'mimo_default',
+  ttsProviderNote:
+    'Lua 脚本默认使用这里保存的模块配置。新的服务商会在对应固件 provider 实现后出现在这里。',
+  ttsAdvanced: 'TTS 高级选项',
+  ttsBaseUrl: 'Base URL',
+  ttsBaseUrlPlaceholder: 'https://api.xiaomimimo.com/v1',
+  ttsTimeout: '超时（毫秒）',
+  ttsTimeoutPlaceholder: '120000',
 
   sectionIm: '即时通讯 (IM)',
   imAdd: '添加',

@@ -22,6 +22,12 @@ export type AppConfig = {
   llm_supports_tools: string;
   llm_supports_vision: string;
   llm_image_remote_url_only: string;
+  tts_provider: string;
+  tts_api_key: string;
+  tts_base_url: string;
+  tts_model: string;
+  tts_voice: string;
+  tts_timeout_ms: string;
   qq_app_id: string;
   qq_app_secret: string;
   qq_msg_type: string;
@@ -43,7 +49,15 @@ export type AppConfig = {
 
 /** Server-side configuration groups (must stay in sync with
  * CONFIG_FIELDS in http_server_config_api.c). */
-export type ConfigGroup = 'wifi' | 'llm' | 'im' | 'search' | 'capabilities' | 'skills' | 'time';
+export type ConfigGroup =
+  | 'wifi'
+  | 'llm'
+  | 'tts'
+  | 'im'
+  | 'search'
+  | 'capabilities'
+  | 'skills'
+  | 'time';
 
 export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
   wifi: ['wifi_ssid', 'wifi_password', 'ap_ssid', 'ap_password', 'ap_behavior'],
@@ -60,6 +74,14 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'llm_supports_tools',
     'llm_supports_vision',
     'llm_image_remote_url_only',
+  ],
+  tts: [
+    'tts_provider',
+    'tts_api_key',
+    'tts_base_url',
+    'tts_model',
+    'tts_voice',
+    'tts_timeout_ms',
   ],
   im: [
     'qq_app_id',
