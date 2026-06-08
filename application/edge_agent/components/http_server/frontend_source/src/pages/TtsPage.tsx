@@ -8,10 +8,13 @@ import { CollapsibleConfigBlock, StaticConfigBlock } from '../components/ui/Conf
 import { SelectInput, TextInput } from '../components/ui/FormField';
 import { SavePanel } from '../components/ui/SavePanel';
 import { Banner } from '../components/ui/Banner';
+import { Switch } from '../components/ui/Switch';
 
 type TtsForm = {
   tts_provider: string;
-  tts_api_key: string;
+  tts_api_key_saved: boolean;
+  tts_api_key_new: string;
+  tts_api_key_clear: boolean;
   tts_base_url: string;
   tts_model: string;
   tts_voice: string;
@@ -24,20 +27,30 @@ export const TtsPage: Component = () => {
     groups: ['tts'],
     toForm: (config: Partial<AppConfig>) => ({
       tts_provider: config.tts_provider ?? 'xiao_mimo',
-      tts_api_key: config.tts_api_key ?? '',
+      tts_api_key_saved: !!config.tts_api_key,
+      tts_api_key_new: '',
+      tts_api_key_clear: false,
       tts_base_url: config.tts_base_url ?? '',
       tts_model: config.tts_model ?? '',
       tts_voice: config.tts_voice ?? '',
       tts_timeout_ms: config.tts_timeout_ms ?? '120000',
     }),
-    fromForm: (form) => ({
-      tts_provider: form.tts_provider.trim(),
-      tts_api_key: form.tts_api_key.trim(),
-      tts_base_url: form.tts_base_url.trim(),
-      tts_model: form.tts_model.trim(),
-      tts_voice: form.tts_voice.trim(),
-      tts_timeout_ms: form.tts_timeout_ms.trim(),
-    }),
+    fromForm: (form) => {
+      const patch: Partial<AppConfig> = {
+        tts_provider: form.tts_provider.trim(),
+        tts_base_url: form.tts_base_url.trim(),
+        tts_model: form.tts_model.trim(),
+        tts_voice: form.tts_voice.trim(),
+        tts_timeout_ms: form.tts_timeout_ms.trim(),
+      };
+      const apiKey = form.tts_api_key_new.trim();
+      if (apiKey) {
+        patch.tts_api_key = apiKey;
+      } else if (form.tts_api_key_clear) {
+        patch.tts_api_key = '';
+      }
+      return patch;
+    },
   });
   return (
     <TabShell>
@@ -60,8 +73,28 @@ export const TtsPage: Component = () => {
             <TextInput
               type="password"
               label={t('ttsApiKey')}
-              value={tab.form.tts_api_key}
-              onInput={(event) => tab.setForm('tts_api_key', event.currentTarget.value)}
+              placeholder={t('ttsApiKeyPlaceholder') as string}
+              hint={
+                <span class="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span>{t(tab.form.tts_api_key_saved ? 'ttsApiKeySavedHint' : 'ttsApiKeyEmptyHint')}</span>
+                  <Show when={tab.form.tts_api_key_saved}>
+                    <Switch
+                      checked={tab.form.tts_api_key_clear}
+                      label={t('ttsApiKeyClear') as string}
+                      labelClass="text-[var(--color-text-secondary)]"
+                      class="text-[0.72rem]"
+                      onChange={(checked) => tab.setForm('tts_api_key_clear', checked)}
+                    />
+                  </Show>
+                </span>
+              }
+              value={tab.form.tts_api_key_new}
+              onInput={(event) => {
+                tab.setForm('tts_api_key_new', event.currentTarget.value);
+                if (event.currentTarget.value.trim()) {
+                  tab.setForm('tts_api_key_clear', false);
+                }
+              }}
             />
             <TextInput
               label={t('ttsModel')}
