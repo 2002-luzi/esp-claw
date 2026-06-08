@@ -10,34 +10,34 @@ This module exposes text-to-speech playback to Lua.
 - `tts.tts_init` and `tts.tts_play` are aliases for scripts that prefer explicit names.
 
 ## Options
-`tts.init(opts)` and `tts.play(text, opts)` accept:
-- `provider`: currently `xiao_mimo`
-- `api_key`: Xiao MiMo API key
-- `base_url`: defaults to `https://api.xiaomimimo.com/v1`
-- `model`: defaults to `mimo-v2.5-tts`
-- `voice`: provider voice name
-- `style`: optional style prompt passed as a MiMo `user` message
-- `audio_device` or `device`: board manager audio output device, defaults to `audio_dac`
-- `volume`: output volume, 0..100
-- `timeout_ms`: HTTP timeout
+Provider settings are device configuration, not script-local options. Configure
+the TTS provider, API key, base URL, model, voice, and timeout from the web
+settings UI before running scripts.
 
-If an option is not passed, the module also looks for persisted settings:
-`tts_provider`, `tts_device`, `tts_api_key`, `tts_base_url`, `tts_model`, `tts_voice`, and `tts_style`.
+`tts.init(opts)` and `tts.play(text, opts)` accept only runtime playback
+controls:
+- `audio_device` or `device`: board manager audio output device, defaults to `audio_dac`.
+- `volume`: output volume, 0..100, defaults to 80.
+- `timeout_ms`: HTTP timeout, defaults to the configured `tts_timeout_ms`.
+- `style`: optional provider-specific style instruction for the current request.
+
+Passing service configuration options such as `provider`, `api_key`,
+`base_url`, `model`, or `voice` from Lua returns an error. These values must be
+stored in the device settings.
+
+The module reads persisted settings from:
+`tts_provider`, `tts_api_key`, `tts_base_url`, `tts_model`, `tts_voice`, and
+`tts_timeout_ms`.
 
 ## Example
 ```lua
 local tts = require("tts")
 
-local API_KEY = "REPLACE_WITH_YOUR_XIAO_MIMO_KEY"
-
 assert(tts.init({
     volume = 70,
 }))
 
-local result = assert(tts.play("hello from ESP-Claw", {
-    api_key = API_KEY,
-    voice = "mimo_default",
-}))
+local result = assert(tts.play("hello from ESP-Claw"))
 print("played bytes:", result.audio_bytes)
 
 tts.close()

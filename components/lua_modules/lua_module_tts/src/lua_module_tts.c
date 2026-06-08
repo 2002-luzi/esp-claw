@@ -8,6 +8,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -103,6 +104,48 @@ static void lua_tts_read_setting(const char *key, char *dst, size_t dst_size)
     }
 }
 
+static void lua_tts_read_u32_setting(const char *key, uint32_t *out)
+{
+    char value[TTS_SHORT_STR_LEN] = {0};
+    char fallback[TTS_SHORT_STR_LEN] = {0};
+    unsigned long parsed;
+
+    if (!key || !out) {
+        return;
+    }
+
+    snprintf(fallback, sizeof(fallback), "%" PRIu32, *out);
+    if (settings_store_get_string(key, value, sizeof(value), fallback) != ESP_OK || value[0] == '\0') {
+        return;
+    }
+
+    parsed = strtoul(value, NULL, 10);
+    if (parsed > 0 && parsed <= UINT32_MAX) {
+        *out = (uint32_t)parsed;
+    }
+}
+
+static void lua_tts_read_int_setting(const char *key, int *out, int min_value, int max_value)
+{
+    char value[TTS_SHORT_STR_LEN] = {0};
+    char fallback[TTS_SHORT_STR_LEN] = {0};
+    long parsed;
+
+    if (!key || !out) {
+        return;
+    }
+
+    snprintf(fallback, sizeof(fallback), "%d", *out);
+    if (settings_store_get_string(key, value, sizeof(value), fallback) != ESP_OK || value[0] == '\0') {
+        return;
+    }
+
+    parsed = strtol(value, NULL, 10);
+    if (parsed >= min_value && parsed <= max_value) {
+        *out = (int)parsed;
+    }
+}
+
 static void lua_tts_load_defaults(lua_tts_runtime_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
@@ -112,12 +155,84 @@ static void lua_tts_load_defaults(lua_tts_runtime_t *cfg)
     cfg->volume = TTS_DEFAULT_VOLUME;
 
     lua_tts_read_setting("tts_provider", cfg->provider, sizeof(cfg->provider));
-    lua_tts_read_setting("tts_device", cfg->audio_device, sizeof(cfg->audio_device));
     lua_tts_read_setting("tts_api_key", cfg->api_key, sizeof(cfg->api_key));
     lua_tts_read_setting("tts_base_url", cfg->base_url, sizeof(cfg->base_url));
     lua_tts_read_setting("tts_model", cfg->model, sizeof(cfg->model));
     lua_tts_read_setting("tts_voice", cfg->voice, sizeof(cfg->voice));
-    lua_tts_read_setting("tts_style", cfg->style, sizeof(cfg->style));
+    lua_tts_read_u32_setting("tts_timeout_ms", &cfg->timeout_ms);
+}
+
+static bool lua_tts_has_field(lua_State *L, int table_idx, const char *field)
+{
+    bool found;
+
+    lua_getfield(L, table_idx, field);
+    found = !lua_isnil(L, -1);
+    lua_pop(L, 1);
+    return found;
+}
+
+static const char *lua_tts_find_config_field(lua_State *L, int table_idx)
+{
+    static const char *const fields[] = {
+        "provider",
+        "api_key",
+        "base_url",
+        "model",
+        "voice",
+        "appid",
+        "app_id",
+        "access_token",
+        "token",
+        "cluster",
+        "speaker",
+        "resource_id",
+    };
+
+    for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        if (lua_tts_has_field(L, table_idx, fields[i])) {
+            return fields[i];
+        }
+    }
+
+    return NULL;
+}
+
+static esp_err_t lua_tts_reject_config_fields(lua_State *L, int table_idx)
+{
+    const char *field = lua_tts_find_config_field(L, table_idx);
+
+    if (field) {
+        ESP_LOGE(TAG, "TTS option '%s' must be configured in device settings", field);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return ESP_OK;
+}
+
+static int lua_tts_push_config_field_err(lua_State *L, int opts_idx, const char *prefix)
+{
+    const char *field = NULL;
+
+    if (opts_idx == 0 || lua_isnoneornil(L, opts_idx)) {
+        return 0;
+    }
+    if (!lua_istable(L, opts_idx)) {
+        return 0;
+    }
+
+    opts_idx = lua_absindex(L, opts_idx);
+    field = lua_tts_find_config_field(L, opts_idx);
+    if (!field) {
+        return 0;
+    }
+
+    lua_pushnil(L);
+    lua_pushfstring(L,
+                    "%s: option '%s' must be configured in device settings",
+                    prefix ? prefix : "tts",
+                    field);
+    return 2;
 }
 
 static esp_err_t lua_tts_copy_field(lua_State *L, int table_idx,
@@ -207,8 +322,8 @@ static esp_err_t lua_tts_apply_opts(lua_State *L, int opts_idx, lua_tts_runtime_
     }
     opts_idx = lua_absindex(L, opts_idx);
 
-    ESP_RETURN_ON_ERROR(lua_tts_copy_field(L, opts_idx, "provider", cfg->provider, sizeof(cfg->provider)),
-                        TAG, "provider too long");
+    ESP_RETURN_ON_ERROR(lua_tts_reject_config_fields(L, opts_idx),
+                        TAG, "TTS provider options must be configured in device settings");
     lua_getfield(L, opts_idx, "audio_device");
     if (!lua_isnil(L, -1)) {
         cfg->override_audio = true;
@@ -223,14 +338,6 @@ static esp_err_t lua_tts_apply_opts(lua_State *L, int opts_idx, lua_tts_runtime_
     lua_pop(L, 1);
     ESP_RETURN_ON_ERROR(lua_tts_copy_field(L, opts_idx, "device", cfg->audio_device, sizeof(cfg->audio_device)),
                         TAG, "device too long");
-    ESP_RETURN_ON_ERROR(lua_tts_copy_field(L, opts_idx, "api_key", cfg->api_key, sizeof(cfg->api_key)),
-                        TAG, "api_key too long");
-    ESP_RETURN_ON_ERROR(lua_tts_copy_field(L, opts_idx, "base_url", cfg->base_url, sizeof(cfg->base_url)),
-                        TAG, "base_url too long");
-    ESP_RETURN_ON_ERROR(lua_tts_copy_field(L, opts_idx, "model", cfg->model, sizeof(cfg->model)),
-                        TAG, "model too long");
-    ESP_RETURN_ON_ERROR(lua_tts_copy_field(L, opts_idx, "voice", cfg->voice, sizeof(cfg->voice)),
-                        TAG, "voice too long");
     ESP_RETURN_ON_ERROR(lua_tts_copy_field(L, opts_idx, "style", cfg->style, sizeof(cfg->style)),
                         TAG, "style too long");
     ESP_RETURN_ON_ERROR(lua_tts_u32_field(L, opts_idx, "timeout_ms", &cfg->timeout_ms),
@@ -516,9 +623,15 @@ static esp_err_t lua_tts_build_effective_config(lua_State *L,
 static int lua_tts_init(lua_State *L)
 {
     esp_err_t err;
+    int opts_idx = lua_isnoneornil(L, 1) ? 0 : 1;
+    int field_err = lua_tts_push_config_field_err(L, opts_idx, "tts init");
+
+    if (field_err) {
+        return field_err;
+    }
 
     lua_tts_lock();
-    err = lua_tts_runtime_init_locked(L, lua_isnoneornil(L, 1) ? 0 : 1);
+    err = lua_tts_runtime_init_locked(L, opts_idx);
     lua_tts_unlock();
 
     if (err != ESP_OK) {
@@ -549,9 +662,14 @@ static int lua_tts_play(lua_State *L)
     tts_provider_stream_t stream = {0};
     esp_err_t err;
     bool was_initialized;
+    int field_err;
 
     if (text[0] == '\0') {
         return lua_tts_push_err(L, ESP_ERR_INVALID_ARG, "tts play: text is empty");
+    }
+    field_err = lua_tts_push_config_field_err(L, opts_idx, "tts play");
+    if (field_err) {
+        return field_err;
     }
 
     lua_tts_lock();

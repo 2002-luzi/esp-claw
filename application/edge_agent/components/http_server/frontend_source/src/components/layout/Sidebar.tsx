@@ -9,6 +9,7 @@ import {
   Search,
   Settings,
   SquareFunction,
+  Volume2,
   WifiPen,
 } from 'lucide-solid';
 import { createMemo, createSignal, For, Show, type Component } from 'solid-js';
@@ -22,6 +23,7 @@ const IconStatus: Component = () => <Activity class={iconClass} />;
 const IconGear: Component = () => <Settings class={iconClass} />;
 const IconWifi: Component = () => <WifiPen class={iconClass} />;
 const IconLlm: Component = () => <Bot class={iconClass} />;
+const IconTts: Component = () => <Volume2 class={iconClass} />;
 const IconIm: Component = () => <MessageSquareCode class={iconClass} />;
 const IconSearch: Component = () => <Search class={iconClass} />;
 const IconMemory: Component = () => <DatabaseZap class={iconClass} />;
@@ -37,6 +39,7 @@ export type LeafNode = {
     | 'navStatus'
     | 'navBasic'
     | 'navLlm'
+    | 'navTts'
     | 'navIm'
     | 'navWebReq'
     | 'navMemory'
@@ -65,6 +68,7 @@ export const NAV_TREE: NavNode[] = [
     children: [
       { kind: 'leaf', id: 'basic', labelKey: 'navBasic', icon: IconWifi },
       { kind: 'leaf', id: 'llm', labelKey: 'navLlm', icon: IconLlm },
+      { kind: 'leaf', id: 'tts', labelKey: 'navTts', icon: IconTts },
       { kind: 'leaf', id: 'im', labelKey: 'navIm', icon: IconIm },
       { kind: 'leaf', id: 'webreq', labelKey: 'navWebReq', icon: IconSearch },
     ],

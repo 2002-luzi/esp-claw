@@ -37,6 +37,12 @@ typedef struct {
     char llm_supports_tools[8];
     char llm_supports_vision[8];
     char llm_image_remote_url_only[8];
+    char tts_provider[32];
+    char tts_api_key[APP_CONFIG_STR_LEN];
+    char tts_base_url[APP_CONFIG_STR_LEN];
+    char tts_model[64];
+    char tts_voice[64];
+    char tts_timeout_ms[16];
     char qq_app_id[32];
     char qq_app_secret[APP_CONFIG_STR_LEN];
     char qq_msg_type[8];

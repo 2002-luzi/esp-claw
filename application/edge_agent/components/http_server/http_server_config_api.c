@@ -55,6 +55,13 @@ static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("llm",          llm_supports_vision),
     CONFIG_FIELD("llm",          llm_image_remote_url_only),
 
+    CONFIG_FIELD("tts",          tts_provider),
+    CONFIG_FIELD("tts",          tts_api_key),
+    CONFIG_FIELD("tts",          tts_base_url),
+    CONFIG_FIELD("tts",          tts_model),
+    CONFIG_FIELD("tts",          tts_voice),
+    CONFIG_FIELD("tts",          tts_timeout_ms),
+
     CONFIG_FIELD("im",           qq_app_id),
     CONFIG_FIELD("im",           qq_app_secret),
     CONFIG_FIELD("im",           qq_msg_type),
