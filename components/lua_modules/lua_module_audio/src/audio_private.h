@@ -12,8 +12,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "esp_asrc.h"
-#include "esp_asrc_types.h"
 #include "esp_aac_enc.h"
 #include "esp_audio_simple_player_advance.h"
 #include "esp_audio_simple_player.h"
@@ -30,6 +28,7 @@
 #include "freertos/task.h"
 #include "lauxlib.h"
 #include "lua.h"
+#include "lua_audio_common.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -51,25 +50,11 @@
 #define AUDIO_SPECTRUM_DEF_BANDS      16
 #define AUDIO_SPECTRUM_DB_MIN         (-90.0f)
 #define AUDIO_SPECTRUM_DB_MAX         (-20.0f)
-#define AUDIO_ASRC_COMPLEXITY         3
-#define AUDIO_ASRC_TIMEOUT_MS         1000
-#define AUDIO_CODEC_VREG_FORMAT_MAGIC        0x7AC0
-#define AUDIO_CODEC_VREG_FORMAT_SAMPLE_RATE  0x7AC1
-#define AUDIO_CODEC_VREG_FORMAT_CHANNELS     0x7AC2
-#define AUDIO_CODEC_VREG_FORMAT_BITS         0x7AC3
-#define AUDIO_CODEC_VREG_FORMAT_MAGIC_VALUE  0x55414346
 
 typedef enum {
     AUDIO_DEVICE_INPUT = 0,
     AUDIO_DEVICE_OUTPUT,
 } audio_device_kind_t;
-
-typedef struct {
-    uint32_t sample_rate;
-    uint8_t channels;
-    uint8_t bits;
-    uint8_t bytes_per_frame;
-} audio_format_t;
 
 typedef struct audio_device_t {
     audio_device_kind_t kind;
@@ -80,20 +65,6 @@ typedef struct audio_device_t {
     uint8_t holders;
     bool active;
 } audio_device_t;
-
-typedef struct {
-    bool bypass;
-    esp_asrc_handle_t handle;
-    audio_format_t src;
-    audio_format_t dst;
-    uint16_t in_frame_bytes;
-    uint16_t out_frame_bytes;
-    uint8_t *in_buf;
-    uint32_t in_buf_size;
-    uint8_t *out_buf;
-    uint32_t out_buf_size;
-    esp_asrc_buffer_alignment_t align;
-} audio_converter_t;
 
 typedef struct {
     esp_asp_handle_t asp;
@@ -123,9 +94,6 @@ typedef struct {
 } audio_analyzer_t;
 
 char *audio_strdup(const char *s);
-bool audio_format_equal(const audio_format_t *a, const audio_format_t *b);
-esp_err_t audio_format_complete(audio_format_t *fmt);
-void audio_format_log(char *buf, size_t len, const audio_format_t *fmt);
 uint8_t lua_audio_get_u8_field(lua_State *L, int idx, const char *name, int raw_index, uint8_t def);
 uint32_t lua_audio_get_u32_field(lua_State *L, int idx, const char *name, int raw_index, uint32_t def);
 bool lua_audio_parse_format_table(lua_State *L, int idx, audio_format_t *fmt, bool allow_missing);
@@ -146,10 +114,6 @@ void audio_device_release(audio_device_t *dev);
 char *audio_uri_from_path(const char *path);
 char *audio_path_from_file_arg(const char *path_or_uri);
 bool audio_path_valid(const char *path, const char *ext);
-
-void audio_converter_destroy(audio_converter_t *converter);
-esp_err_t audio_converter_create(audio_converter_t *converter, const audio_format_t *src, const audio_format_t *dst);
-esp_err_t audio_converter_process(audio_converter_t *converter, const uint8_t *in, uint32_t in_bytes, uint8_t **out, uint32_t *out_bytes);
 
 int lua_audio_new_output(lua_State *L);
 int lua_audio_new_input(lua_State *L);

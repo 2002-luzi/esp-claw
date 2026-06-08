@@ -246,8 +246,8 @@ menu "App Claw Config"
             help
                 Enable the TTS Lua module and keep app_claw's direct dependency
                 on lua_module_tts when Lua capability is enabled. The module
-                resolves board-manager audio output settings and currently
-                adapts the Xiao MiMo TTS backend.
+                resolves board-manager audio output settings through the audio
+                Lua module helpers and currently adapts the Xiao MiMo TTS backend.
 
         config APP_CLAW_LUA_MODULE_BOARD_MANAGER
             bool "Enable board manager Lua module"

@@ -5,7 +5,6 @@ This module exposes text-to-speech playback to Lua.
 ## How to call
 - Import it with `local tts = require("tts")`
 - Call `tts.init(opts)` to initialize the audio output from board manager. By default it uses `audio_dac`.
-- Call `tts.configure(opts)` to persist provider settings in NVS.
 - Call `tts.play("text")` to request speech from the configured provider and play it through the speaker.
 - Call `tts.close()` when TTS is no longer needed.
 - `tts.tts_init` and `tts.tts_play` are aliases for scripts that prefer explicit names.
@@ -22,24 +21,26 @@ This module exposes text-to-speech playback to Lua.
 - `volume`: output volume, 0..100
 - `timeout_ms`: HTTP timeout
 
-If an option is not passed, the module also looks for NVS settings:
+If an option is not passed, the module also looks for persisted settings:
 `tts_provider`, `tts_device`, `tts_api_key`, `tts_base_url`, `tts_model`, `tts_voice`, and `tts_style`.
 
 ## Example
 ```lua
 local tts = require("tts")
 
-assert(tts.configure({
-    api_key = "YOUR_XIAO_MIMO_KEY",
-    voice = "mimo_default",
-}))
+local API_KEY = "REPLACE_WITH_YOUR_XIAO_MIMO_KEY"
 
 assert(tts.init({
     volume = 70,
 }))
 
-local result = assert(tts.play("hello from ESP-Claw"))
+local result = assert(tts.play("hello from ESP-Claw", {
+    api_key = API_KEY,
+    voice = "mimo_default",
+}))
 print("played bytes:", result.audio_bytes)
 
 tts.close()
 ```
+
+The same example is available as `test/tts_play.lua`.

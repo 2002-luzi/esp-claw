@@ -19,6 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "lauxlib.h"
+#include "lua_audio_common.h"
 #include "settings_store.h"
 #include "tts_provider.h"
 
@@ -46,22 +47,16 @@ typedef struct {
     bool initialized;
     bool override_audio;
     esp_codec_dev_handle_t codec_dev;
-    uint32_t sample_rate_hz;
-    uint8_t channels;
-    uint8_t bits_per_sample;
-    uint8_t bytes_per_sample;
+    audio_format_t output_fmt;
 } lua_tts_runtime_t;
 
 typedef struct {
     esp_codec_dev_handle_t codec_dev;
-    tts_audio_format_t src;
-    tts_audio_format_t dst;
-    uint8_t dst_bytes_per_sample;
+    audio_converter_t converter;
+    audio_format_t src;
     uint8_t *in_buf;
     size_t in_len;
     size_t in_cap;
-    uint8_t *out_buf;
-    size_t out_cap;
     size_t audio_bytes_written;
 } lua_tts_audio_sink_t;
 
@@ -327,18 +322,16 @@ static esp_err_t lua_tts_get_board_audio_output(lua_tts_runtime_t *cfg)
     }
 
     err = lua_tts_get_i2s_audio_format((const periph_i2s_config_t *)periph_config,
-                                       &cfg->sample_rate_hz,
-                                       &cfg->channels,
-                                       &cfg->bits_per_sample);
+                                       &cfg->output_fmt.sample_rate,
+                                       &cfg->output_fmt.channels,
+                                       &cfg->output_fmt.bits);
     if (err != ESP_OK) {
         return err;
     }
-    if (cfg->sample_rate_hz == 0 || cfg->channels == 0 ||
-        (cfg->bits_per_sample != 16 && cfg->bits_per_sample != 32)) {
+    if (audio_format_complete(&cfg->output_fmt) != ESP_OK) {
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    cfg->bytes_per_sample = (uint8_t)(cfg->bits_per_sample / 8);
     cfg->codec_dev = codec_handles->codec_dev;
     return ESP_OK;
 #else
@@ -349,24 +342,10 @@ static esp_err_t lua_tts_get_board_audio_output(lua_tts_runtime_t *cfg)
 
 static esp_err_t lua_tts_open_codec(lua_tts_runtime_t *cfg)
 {
-    esp_codec_dev_sample_info_t fs = {
-        .sample_rate = cfg->sample_rate_hz,
-        .channel = cfg->channels,
-        .bits_per_sample = cfg->bits_per_sample,
-    };
-
-    int ret = esp_codec_dev_open(cfg->codec_dev, &fs);
-    if (ret != ESP_CODEC_DEV_OK) {
-        return ESP_FAIL;
+    if (!cfg) {
+        return ESP_ERR_INVALID_ARG;
     }
-
-    ret = esp_codec_dev_set_out_vol(cfg->codec_dev, cfg->volume);
-    if (ret != ESP_CODEC_DEV_OK && ret != ESP_CODEC_DEV_NOT_SUPPORT) {
-        esp_codec_dev_close(cfg->codec_dev);
-        return ESP_FAIL;
-    }
-
-    return ESP_OK;
+    return audio_codec_open_output(cfg->codec_dev, &cfg->output_fmt, cfg->volume);
 }
 
 static void lua_tts_runtime_close_locked(void)
@@ -408,114 +387,30 @@ static esp_err_t lua_tts_runtime_init_locked(lua_State *L, int opts_idx)
     ESP_LOGI(TAG, "TTS initialized provider=%s device=%s output=%" PRIu32 "Hz/%uch/%ubit",
              s_tts.provider,
              s_tts.audio_device,
-             s_tts.sample_rate_hz,
-             s_tts.channels,
-             s_tts.bits_per_sample);
+             s_tts.output_fmt.sample_rate,
+             s_tts.output_fmt.channels,
+             s_tts.output_fmt.bits);
     return ESP_OK;
 }
 
 static uint32_t lua_tts_chunk_bytes(uint32_t sample_rate_hz,
-                                    uint8_t channels,
-                                    uint8_t bytes_per_sample)
+                                    uint8_t bytes_per_frame)
 {
-    return (uint32_t)(((uint64_t)sample_rate_hz * channels * bytes_per_sample * TTS_CHUNK_MS) / 1000U);
-}
-
-static int16_t lua_tts_read_i16le(const uint8_t *p)
-{
-    return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
-}
-
-static void lua_tts_write_sample(uint8_t *dst, uint8_t channels, uint8_t bytes_per_sample, int16_t sample)
-{
-    for (uint8_t ch = 0; ch < channels; ch++) {
-        if (bytes_per_sample == 2) {
-            dst[0] = (uint8_t)(sample & 0xFF);
-            dst[1] = (uint8_t)(((uint16_t)sample >> 8) & 0xFF);
-            dst += 2;
-        } else {
-            int32_t sample32 = (int32_t)sample << 16;
-            dst[0] = (uint8_t)(sample32 & 0xFF);
-            dst[1] = (uint8_t)((sample32 >> 8) & 0xFF);
-            dst[2] = (uint8_t)((sample32 >> 16) & 0xFF);
-            dst[3] = (uint8_t)((sample32 >> 24) & 0xFF);
-            dst += 4;
-        }
-    }
-}
-
-static esp_err_t lua_tts_convert_24k_mono_to_board(lua_tts_audio_sink_t *sink,
-                                                   const uint8_t *pcm,
-                                                   size_t pcm_len,
-                                                   uint8_t **out,
-                                                   size_t *out_len)
-{
-    size_t in_frames = pcm_len / 2;
-    size_t out_frames = 0;
-    uint8_t frame_bytes = sink->dst.channels * sink->dst_bytes_per_sample;
-
-    if (pcm_len == 0 || (pcm_len % 2) != 0) {
-        *out = NULL;
-        *out_len = 0;
-        return pcm_len == 0 ? ESP_OK : ESP_ERR_INVALID_SIZE;
-    }
-
-    if (sink->dst.sample_rate_hz == sink->src.sample_rate_hz) {
-        out_frames = in_frames;
-    } else if (sink->dst.sample_rate_hz == sink->src.sample_rate_hz * 2) {
-        out_frames = in_frames * 2;
-    } else if (sink->src.sample_rate_hz == 24000 && sink->dst.sample_rate_hz == 16000) {
-        out_frames = (in_frames * 2) / 3;
-    } else {
-        out_frames = (size_t)(((uint64_t)in_frames * sink->dst.sample_rate_hz) / sink->src.sample_rate_hz);
-    }
-
-    if (out_frames == 0) {
-        *out = NULL;
-        *out_len = 0;
-        return ESP_OK;
-    }
-    if (out_frames * frame_bytes > sink->out_cap) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    for (size_t j = 0; j < out_frames; j++) {
-        size_t src_index;
-        int16_t sample;
-
-        if (sink->dst.sample_rate_hz == sink->src.sample_rate_hz) {
-            src_index = j;
-        } else if (sink->dst.sample_rate_hz == sink->src.sample_rate_hz * 2) {
-            src_index = j / 2;
-        } else if (sink->src.sample_rate_hz == 24000 && sink->dst.sample_rate_hz == 16000) {
-            src_index = (j * 3) / 2;
-        } else {
-            src_index = (size_t)(((uint64_t)j * sink->src.sample_rate_hz) / sink->dst.sample_rate_hz);
-        }
-        if (src_index >= in_frames) {
-            src_index = in_frames - 1;
-        }
-        sample = lua_tts_read_i16le(pcm + src_index * 2);
-        lua_tts_write_sample(sink->out_buf + j * frame_bytes,
-                             sink->dst.channels,
-                             sink->dst_bytes_per_sample,
-                             sample);
-    }
-
-    *out = sink->out_buf;
-    *out_len = out_frames * frame_bytes;
-    return ESP_OK;
+    return (uint32_t)(((uint64_t)sample_rate_hz * bytes_per_frame * TTS_CHUNK_MS) / 1000U);
 }
 
 static esp_err_t lua_tts_sink_flush(lua_tts_audio_sink_t *sink)
 {
     uint8_t *out = NULL;
-    size_t out_len = 0;
+    uint32_t out_len = 0;
 
     if (sink->in_len == 0) {
         return ESP_OK;
     }
-    ESP_RETURN_ON_ERROR(lua_tts_convert_24k_mono_to_board(sink, sink->in_buf, sink->in_len, &out, &out_len),
+    if (sink->in_len > UINT32_MAX) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    ESP_RETURN_ON_ERROR(audio_converter_process(&sink->converter, sink->in_buf, (uint32_t)sink->in_len, &out, &out_len),
                         TAG, "failed to convert TTS PCM");
     sink->in_len = 0;
     if (out_len == 0) {
@@ -561,37 +456,41 @@ static esp_err_t lua_tts_sink_init(lua_tts_audio_sink_t *sink,
                                    const tts_audio_format_t *src)
 {
     uint32_t in_cap = 0;
-    uint32_t out_cap = 0;
+    esp_err_t err;
 
-    if (!sink || !runtime || !src || src->sample_rate_hz != 24000 ||
-        src->channels != 1 || src->bits_per_sample != 16) {
-        return ESP_ERR_NOT_SUPPORTED;
+    if (!sink || !runtime || !src) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!runtime->codec_dev) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     memset(sink, 0, sizeof(*sink));
     sink->codec_dev = runtime->codec_dev;
-    sink->src = *src;
-    sink->dst.sample_rate_hz = runtime->sample_rate_hz;
-    sink->dst.channels = runtime->channels;
-    sink->dst.bits_per_sample = runtime->bits_per_sample;
-    sink->dst_bytes_per_sample = runtime->bytes_per_sample;
+    sink->src.sample_rate = src->sample_rate_hz;
+    sink->src.channels = src->channels;
+    sink->src.bits = src->bits_per_sample;
+    if (audio_format_complete(&sink->src) != ESP_OK) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
 
-    in_cap = lua_tts_chunk_bytes(src->sample_rate_hz, src->channels, src->bits_per_sample / 8);
-    out_cap = lua_tts_chunk_bytes(runtime->sample_rate_hz, runtime->channels, runtime->bytes_per_sample);
-    if (in_cap == 0 || out_cap == 0) {
+    in_cap = lua_tts_chunk_bytes(sink->src.sample_rate, sink->src.bytes_per_frame);
+    if (in_cap == 0) {
         return ESP_ERR_INVALID_SIZE;
     }
 
     sink->in_buf = malloc(in_cap);
-    sink->out_buf = malloc(out_cap);
-    if (!sink->in_buf || !sink->out_buf) {
-        free(sink->in_buf);
-        free(sink->out_buf);
+    if (!sink->in_buf) {
         memset(sink, 0, sizeof(*sink));
         return ESP_ERR_NO_MEM;
     }
+    err = audio_converter_create(&sink->converter, &sink->src, &runtime->output_fmt);
+    if (err != ESP_OK) {
+        free(sink->in_buf);
+        memset(sink, 0, sizeof(*sink));
+        return err;
+    }
     sink->in_cap = in_cap;
-    sink->out_cap = out_cap;
     return ESP_OK;
 }
 
@@ -601,7 +500,7 @@ static void lua_tts_sink_deinit(lua_tts_audio_sink_t *sink)
         return;
     }
     free(sink->in_buf);
-    free(sink->out_buf);
+    audio_converter_destroy(&sink->converter);
     memset(sink, 0, sizeof(*sink));
 }
 
@@ -737,77 +636,15 @@ static int lua_tts_status(lua_State *L)
     lua_setfield(L, -2, "provider");
     lua_pushstring(L, s_tts.audio_device);
     lua_setfield(L, -2, "audio_device");
-    lua_pushinteger(L, (lua_Integer)s_tts.sample_rate_hz);
+    lua_pushinteger(L, (lua_Integer)s_tts.output_fmt.sample_rate);
     lua_setfield(L, -2, "sample_rate_hz");
-    lua_pushinteger(L, (lua_Integer)s_tts.channels);
+    lua_pushinteger(L, (lua_Integer)s_tts.output_fmt.channels);
     lua_setfield(L, -2, "channels");
-    lua_pushinteger(L, (lua_Integer)s_tts.bits_per_sample);
+    lua_pushinteger(L, (lua_Integer)s_tts.output_fmt.bits);
     lua_setfield(L, -2, "bits_per_sample");
     lua_pushinteger(L, (lua_Integer)s_tts.volume);
     lua_setfield(L, -2, "volume");
     lua_tts_unlock();
-    return 1;
-}
-
-static esp_err_t lua_tts_save_string_opt(lua_State *L, int table_idx,
-                                         const char *field,
-                                         const char *key)
-{
-    lua_getfield(L, table_idx, field);
-    if (!lua_isnil(L, -1)) {
-        esp_err_t err;
-        if (!lua_isstring(L, -1)) {
-            lua_pop(L, 1);
-            return ESP_ERR_INVALID_ARG;
-        }
-        err = settings_store_set_string(key, lua_tostring(L, -1));
-        lua_pop(L, 1);
-        return err;
-    }
-    lua_pop(L, 1);
-    return ESP_OK;
-}
-
-static int lua_tts_configure(lua_State *L)
-{
-    esp_err_t err;
-    int opts_idx = 1;
-
-    if (!lua_istable(L, opts_idx)) {
-        return lua_tts_push_err(L, ESP_ERR_INVALID_ARG, "tts configure: opts table required");
-    }
-
-    opts_idx = lua_absindex(L, opts_idx);
-    lua_tts_lock();
-    err = lua_tts_save_string_opt(L, opts_idx, "provider", "tts_provider");
-    if (err == ESP_OK) {
-        err = lua_tts_save_string_opt(L, opts_idx, "audio_device", "tts_device");
-    }
-    if (err == ESP_OK) {
-        err = lua_tts_save_string_opt(L, opts_idx, "device", "tts_device");
-    }
-    if (err == ESP_OK) {
-        err = lua_tts_save_string_opt(L, opts_idx, "api_key", "tts_api_key");
-    }
-    if (err == ESP_OK) {
-        err = lua_tts_save_string_opt(L, opts_idx, "base_url", "tts_base_url");
-    }
-    if (err == ESP_OK) {
-        err = lua_tts_save_string_opt(L, opts_idx, "model", "tts_model");
-    }
-    if (err == ESP_OK) {
-        err = lua_tts_save_string_opt(L, opts_idx, "voice", "tts_voice");
-    }
-    if (err == ESP_OK) {
-        err = lua_tts_save_string_opt(L, opts_idx, "style", "tts_style");
-    }
-    lua_tts_unlock();
-
-    if (err != ESP_OK) {
-        return lua_tts_push_err(L, err, "tts configure");
-    }
-
-    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -818,7 +655,6 @@ int luaopen_tts(lua_State *L)
         {"play",      lua_tts_play},
         {"close",     lua_tts_close},
         {"status",    lua_tts_status},
-        {"configure", lua_tts_configure},
         {"tts_init",  lua_tts_init},
         {"tts_play",  lua_tts_play},
         {NULL, NULL},

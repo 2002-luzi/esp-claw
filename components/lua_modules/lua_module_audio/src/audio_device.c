@@ -21,7 +21,9 @@ void audio_device_release(audio_device_t *dev)
     }
 }
 
-static void audio_device_refresh_actual_format(audio_device_t *dev)
+void audio_codec_refresh_actual_format(esp_codec_dev_handle_t codec_dev,
+                                       audio_format_t *fmt,
+                                       const char *role)
 {
     int magic = 0;
     int rate = 0;
@@ -29,12 +31,16 @@ static void audio_device_refresh_actual_format(audio_device_t *dev)
     int bits = 0;
     audio_format_t actual = {0};
 
-    if (esp_codec_dev_read_reg(dev->codec_dev, AUDIO_CODEC_VREG_FORMAT_MAGIC, &magic) != ESP_CODEC_DEV_OK || magic != AUDIO_CODEC_VREG_FORMAT_MAGIC_VALUE) {
+    if (!codec_dev || !fmt) {
         return;
     }
-    if (esp_codec_dev_read_reg(dev->codec_dev, AUDIO_CODEC_VREG_FORMAT_SAMPLE_RATE, &rate) != ESP_CODEC_DEV_OK ||
-        esp_codec_dev_read_reg(dev->codec_dev, AUDIO_CODEC_VREG_FORMAT_CHANNELS, &channels) != ESP_CODEC_DEV_OK ||
-        esp_codec_dev_read_reg(dev->codec_dev, AUDIO_CODEC_VREG_FORMAT_BITS, &bits) != ESP_CODEC_DEV_OK) {
+
+    if (esp_codec_dev_read_reg(codec_dev, AUDIO_CODEC_VREG_FORMAT_MAGIC, &magic) != ESP_CODEC_DEV_OK || magic != AUDIO_CODEC_VREG_FORMAT_MAGIC_VALUE) {
+        return;
+    }
+    if (esp_codec_dev_read_reg(codec_dev, AUDIO_CODEC_VREG_FORMAT_SAMPLE_RATE, &rate) != ESP_CODEC_DEV_OK ||
+        esp_codec_dev_read_reg(codec_dev, AUDIO_CODEC_VREG_FORMAT_CHANNELS, &channels) != ESP_CODEC_DEV_OK ||
+        esp_codec_dev_read_reg(codec_dev, AUDIO_CODEC_VREG_FORMAT_BITS, &bits) != ESP_CODEC_DEV_OK) {
         ESP_LOGE(TAG, "Codec actual format read failed");
         return;
     }
@@ -46,11 +52,11 @@ static void audio_device_refresh_actual_format(audio_device_t *dev)
         ESP_LOGE(TAG, "Codec actual format invalid: rate=%d ch=%d bits=%d", rate, channels, bits);
         return;
     }
-    if (!audio_format_equal(&dev->fmt, &actual)) {
+    if (!audio_format_equal(fmt, &actual)) {
         ESP_LOGI(TAG, "Codec actual format: role=%s requested=%" PRIu32 "/%u/%u actual=%" PRIu32 "/%u/%u",
-                 dev->kind == AUDIO_DEVICE_OUTPUT ? "output" : "input", dev->fmt.sample_rate, dev->fmt.channels, dev->fmt.bits,
+                 role ? role : "unknown", fmt->sample_rate, fmt->channels, fmt->bits,
                  actual.sample_rate, actual.channels, actual.bits);
-        dev->fmt = actual;
+        *fmt = actual;
     }
 }
 
@@ -61,29 +67,73 @@ static float audio_input_volume_to_db(int volume)
 
 static esp_err_t audio_device_open(audio_device_t *dev)
 {
-    esp_codec_dev_sample_info_t fs = {
+    esp_codec_dev_sample_info_t fs;
+    int ret;
+
+    if (dev->kind == AUDIO_DEVICE_OUTPUT) {
+        ret = audio_codec_open_output(dev->codec_dev, &dev->fmt, dev->volume);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+        dev->closed = false;
+        return ESP_OK;
+    }
+
+    fs = (esp_codec_dev_sample_info_t) {
         .sample_rate = dev->fmt.sample_rate,
         .channel = dev->fmt.channels,
         .bits_per_sample = dev->fmt.bits,
     };
-    int ret = esp_codec_dev_open(dev->codec_dev, &fs);
+    ret = esp_codec_dev_open(dev->codec_dev, &fs);
     if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Codec open failed: role=%s rate=%" PRIu32 " ch=%u bits=%u ret=%d",
-                 dev->kind == AUDIO_DEVICE_OUTPUT ? "output" : "input", dev->fmt.sample_rate, dev->fmt.channels, dev->fmt.bits, ret);
+        ESP_LOGE(TAG, "Codec open failed: role=input rate=%" PRIu32 " ch=%u bits=%u ret=%d",
+                 dev->fmt.sample_rate, dev->fmt.channels, dev->fmt.bits, ret);
         return ESP_FAIL;
     }
-    audio_device_refresh_actual_format(dev);
-    if (dev->kind == AUDIO_DEVICE_OUTPUT) {
-        ret = esp_codec_dev_set_out_vol(dev->codec_dev, dev->volume);
-    } else {
-        ret = esp_codec_dev_set_in_gain(dev->codec_dev, audio_input_volume_to_db(dev->volume));
-    }
+    audio_codec_refresh_actual_format(dev->codec_dev, &dev->fmt, "input");
+    ret = esp_codec_dev_set_in_gain(dev->codec_dev, audio_input_volume_to_db(dev->volume));
     if (ret != ESP_CODEC_DEV_OK && ret != ESP_CODEC_DEV_NOT_SUPPORT) {
-        ESP_LOGE(TAG, "Codec level setup failed: role=%s ret=%d", dev->kind == AUDIO_DEVICE_OUTPUT ? "output" : "input", ret);
+        ESP_LOGE(TAG, "Codec level setup failed: role=input ret=%d", ret);
         esp_codec_dev_close(dev->codec_dev);
         return ESP_FAIL;
     }
     dev->closed = false;
+    return ESP_OK;
+}
+
+esp_err_t audio_codec_open_output(esp_codec_dev_handle_t codec_dev,
+                                  audio_format_t *fmt,
+                                  int volume)
+{
+    esp_codec_dev_sample_info_t fs;
+    int ret;
+
+    if (!codec_dev || !fmt || audio_format_complete(fmt) != ESP_OK) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (volume < 0 || volume > 100) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    fs = (esp_codec_dev_sample_info_t) {
+        .sample_rate = fmt->sample_rate,
+        .channel = fmt->channels,
+        .bits_per_sample = fmt->bits,
+    };
+    ret = esp_codec_dev_open(codec_dev, &fs);
+    if (ret != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Codec open failed: role=output rate=%" PRIu32 " ch=%u bits=%u ret=%d",
+                 fmt->sample_rate, fmt->channels, fmt->bits, ret);
+        return ESP_FAIL;
+    }
+
+    audio_codec_refresh_actual_format(codec_dev, fmt, "output");
+    ret = esp_codec_dev_set_out_vol(codec_dev, volume);
+    if (ret != ESP_CODEC_DEV_OK && ret != ESP_CODEC_DEV_NOT_SUPPORT) {
+        ESP_LOGE(TAG, "Codec output volume setup failed: ret=%d", ret);
+        esp_codec_dev_close(codec_dev);
+        return ESP_FAIL;
+    }
     return ESP_OK;
 }
 

@@ -11,6 +11,7 @@ idf_component_register(
         esp-tls
         http_reuse
         json
+        lua_module_audio
         mbedtls
         settings
 )
