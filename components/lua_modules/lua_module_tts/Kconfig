@@ -9,4 +9,34 @@ config LUA_TTS_MEMORY_PROFILING
         Keep this disabled for normal firmware builds because it adds verbose
         diagnostic logs.
 
+config LUA_TTS_CHUNK_MS
+    int "Lua TTS source PCM chunk duration in milliseconds"
+    range 10 120
+    default 30
+    help
+        Configure how much provider PCM the Lua TTS sink accumulates before
+        converting and writing to the codec. Smaller values reduce each
+        synchronous codec write window and can make streamed playback more
+        responsive to network bursts, at the cost of more frequent conversion
+        and write calls.
+
+config LUA_TTS_SOURCE_BUFFER_MS
+    int "Lua TTS source PCM ring buffer duration in milliseconds"
+    range 0 500
+    default 120
+    help
+        Configure the source PCM stream buffer used to decouple network TTS
+        delivery from codec writes. The buffer stores provider PCM before ASRC,
+        so MiMo 24 kHz mono 16-bit PCM costs about 48 bytes per millisecond.
+        Set to 0 to disable buffered playback and use the synchronous path.
+
+config LUA_TTS_PREBUFFER_MS
+    int "Lua TTS source PCM prebuffer duration in milliseconds"
+    range 0 250
+    default 60
+    help
+        Configure how much source PCM must be queued before the playback task
+        starts writing to the codec. This absorbs short network/SSE delivery
+        gaps without buffering the larger converted output PCM.
+
 endmenu

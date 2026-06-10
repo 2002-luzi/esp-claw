@@ -19,6 +19,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/stream_buffer.h"
+#include "freertos/task.h"
 #include "lauxlib.h"
 #include "lua_audio_common.h"
 #include "settings_store.h"
@@ -26,7 +28,6 @@
 
 #ifdef CONFIG_LUA_TTS_MEMORY_PROFILING
 #include "esp_heap_caps.h"
-#include "freertos/task.h"
 #endif
 
 #define LUA_MODULE_TTS_NAME         "tts"
@@ -37,7 +38,20 @@
 #define TTS_CONFIG_STR_LEN          320
 #define TTS_SHORT_STR_LEN           64
 #define TTS_STYLE_MAX_CHARS         512
-#define TTS_CHUNK_MS                60
+#ifndef CONFIG_LUA_TTS_CHUNK_MS
+#define CONFIG_LUA_TTS_CHUNK_MS     30
+#endif
+#ifndef CONFIG_LUA_TTS_SOURCE_BUFFER_MS
+#define CONFIG_LUA_TTS_SOURCE_BUFFER_MS 120
+#endif
+#ifndef CONFIG_LUA_TTS_PREBUFFER_MS
+#define CONFIG_LUA_TTS_PREBUFFER_MS 60
+#endif
+#define TTS_CHUNK_MS                CONFIG_LUA_TTS_CHUNK_MS
+#define TTS_SOURCE_BUFFER_MS        CONFIG_LUA_TTS_SOURCE_BUFFER_MS
+#define TTS_PREBUFFER_MS            CONFIG_LUA_TTS_PREBUFFER_MS
+#define TTS_PLAYBACK_TASK_STACK     (4 * 1024)
+#define TTS_PLAYBACK_TASK_PRIORITY  5
 
 static const char *TAG = "lua_tts";
 
@@ -66,6 +80,14 @@ typedef struct {
     size_t in_cap;
     size_t audio_bytes_written;
     bool first_convert_logged;
+    StreamBufferHandle_t stream_buf;
+    TaskHandle_t playback_task;
+    SemaphoreHandle_t playback_done;
+    esp_err_t playback_err;
+    size_t prebuffer_bytes;
+    volatile bool producer_done;
+    volatile bool playback_finished;
+    bool use_buffered_playback;
 } lua_tts_audio_sink_t;
 
 static lua_tts_runtime_t s_tts;
@@ -674,9 +696,17 @@ static uint32_t lua_tts_chunk_bytes(uint32_t sample_rate_hz,
     return (uint32_t)(((uint64_t)sample_rate_hz * bytes_per_frame * TTS_CHUNK_MS) / 1000U);
 }
 
+static uint32_t lua_tts_ms_bytes(uint32_t sample_rate_hz,
+                                 uint8_t bytes_per_frame,
+                                 uint32_t duration_ms)
+{
+    return (uint32_t)(((uint64_t)sample_rate_hz * bytes_per_frame * duration_ms) / 1000U);
+}
+
 static esp_err_t lua_tts_sink_flush(lua_tts_audio_sink_t *sink)
 {
     uint8_t *out = NULL;
+    size_t in_len = 0;
     uint32_t out_len = 0;
 
     if (sink->in_len == 0) {
@@ -685,7 +715,8 @@ static esp_err_t lua_tts_sink_flush(lua_tts_audio_sink_t *sink)
     if (sink->in_len > UINT32_MAX) {
         return ESP_ERR_INVALID_SIZE;
     }
-    ESP_RETURN_ON_ERROR(audio_converter_process(&sink->converter, sink->in_buf, (uint32_t)sink->in_len, &out, &out_len),
+    in_len = sink->in_len;
+    ESP_RETURN_ON_ERROR(audio_converter_process(&sink->converter, sink->in_buf, (uint32_t)in_len, &out, &out_len),
                         TAG, "failed to convert TTS PCM");
     if (!sink->first_convert_logged) {
         sink->first_convert_logged = true;
@@ -702,9 +733,8 @@ static esp_err_t lua_tts_sink_flush(lua_tts_audio_sink_t *sink)
     return ESP_OK;
 }
 
-static esp_err_t lua_tts_sink_write(void *ctx, const uint8_t *pcm, size_t len)
+static esp_err_t lua_tts_sink_write_direct(lua_tts_audio_sink_t *sink, const uint8_t *pcm, size_t len)
 {
-    lua_tts_audio_sink_t *sink = (lua_tts_audio_sink_t *)ctx;
     size_t offset = 0;
 
     if (!sink || (!pcm && len > 0)) {
@@ -728,6 +758,179 @@ static esp_err_t lua_tts_sink_write(void *ctx, const uint8_t *pcm, size_t len)
     }
 
     return ESP_OK;
+}
+
+static esp_err_t lua_tts_sink_write(void *ctx, const uint8_t *pcm, size_t len)
+{
+    lua_tts_audio_sink_t *sink = (lua_tts_audio_sink_t *)ctx;
+
+    if (!sink || (!pcm && len > 0)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!sink->use_buffered_playback) {
+        return lua_tts_sink_write_direct(sink, pcm, len);
+    }
+    if (len == 0) {
+        return ESP_OK;
+    }
+    if (!sink->stream_buf) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    size_t sent = 0;
+    while (sent < len) {
+        if (sink->playback_finished && sink->playback_err != ESP_OK) {
+            return sink->playback_err;
+        }
+        size_t wrote = xStreamBufferSend(sink->stream_buf,
+                                         pcm + sent,
+                                         len - sent,
+                                         pdMS_TO_TICKS(100));
+        if (wrote == 0) {
+            if (sink->playback_finished) {
+                return sink->playback_err == ESP_OK ? ESP_FAIL : sink->playback_err;
+            }
+            continue;
+        }
+        sent += wrote;
+    }
+
+    return ESP_OK;
+}
+
+static void lua_tts_playback_task(void *arg)
+{
+    lua_tts_audio_sink_t *sink = (lua_tts_audio_sink_t *)arg;
+    uint8_t *chunk = NULL;
+    esp_err_t err = ESP_OK;
+    size_t need = 0;
+
+    if (!sink || !sink->stream_buf || !sink->playback_done) {
+        vTaskDelete(NULL);
+        return;
+    }
+
+    need = sink->in_cap;
+    chunk = malloc(need);
+    if (!chunk) {
+        sink->playback_err = ESP_ERR_NO_MEM;
+        sink->playback_finished = true;
+        xSemaphoreGive(sink->playback_done);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    while (!sink->producer_done &&
+           sink->prebuffer_bytes > 0 &&
+           xStreamBufferBytesAvailable(sink->stream_buf) < sink->prebuffer_bytes) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+    }
+
+    while (err == ESP_OK) {
+        size_t got = xStreamBufferReceive(sink->stream_buf,
+                                          chunk,
+                                          need,
+                                          pdMS_TO_TICKS(20));
+        if (got > 0) {
+            err = lua_tts_sink_write_direct(sink, chunk, got);
+            continue;
+        }
+        if (sink->producer_done && xStreamBufferBytesAvailable(sink->stream_buf) == 0) {
+            break;
+        }
+    }
+
+    if (err == ESP_OK) {
+        err = lua_tts_sink_flush(sink);
+    }
+    sink->playback_err = err;
+    free(chunk);
+    sink->playback_finished = true;
+    xSemaphoreGive(sink->playback_done);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t lua_tts_sink_start_buffered(lua_tts_audio_sink_t *sink)
+{
+    uint32_t buffer_bytes = 0;
+    uint32_t prebuffer_bytes = 0;
+
+    if (!sink || TTS_SOURCE_BUFFER_MS == 0) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    buffer_bytes = lua_tts_ms_bytes(sink->src.sample_rate,
+                                    sink->src.bytes_per_frame,
+                                    TTS_SOURCE_BUFFER_MS);
+    prebuffer_bytes = lua_tts_ms_bytes(sink->src.sample_rate,
+                                       sink->src.bytes_per_frame,
+                                       TTS_PREBUFFER_MS);
+    if (buffer_bytes < sink->in_cap) {
+        buffer_bytes = sink->in_cap;
+    }
+    if (prebuffer_bytes > buffer_bytes) {
+        prebuffer_bytes = buffer_bytes;
+    }
+
+    sink->stream_buf = xStreamBufferCreate(buffer_bytes + 1, 1);
+    if (!sink->stream_buf) {
+        return ESP_ERR_NO_MEM;
+    }
+    sink->playback_done = xSemaphoreCreateBinary();
+    if (!sink->playback_done) {
+        vStreamBufferDelete(sink->stream_buf);
+        sink->stream_buf = NULL;
+        return ESP_ERR_NO_MEM;
+    }
+
+    sink->prebuffer_bytes = prebuffer_bytes;
+    sink->playback_err = ESP_OK;
+    sink->producer_done = false;
+    sink->playback_finished = false;
+    sink->use_buffered_playback = true;
+
+    BaseType_t ok = xTaskCreate(lua_tts_playback_task,
+                                "tts_playback",
+                                TTS_PLAYBACK_TASK_STACK,
+                                sink,
+                                TTS_PLAYBACK_TASK_PRIORITY,
+                                &sink->playback_task);
+    if (ok != pdPASS) {
+        vSemaphoreDelete(sink->playback_done);
+        vStreamBufferDelete(sink->stream_buf);
+        sink->playback_done = NULL;
+        sink->stream_buf = NULL;
+        sink->playback_task = NULL;
+        sink->use_buffered_playback = false;
+        return ESP_ERR_NO_MEM;
+    }
+
+    return ESP_OK;
+}
+
+static esp_err_t lua_tts_sink_finish_buffered_with_status(lua_tts_audio_sink_t *sink, esp_err_t producer_err)
+{
+    esp_err_t err;
+
+    if (!sink || !sink->use_buffered_playback) {
+        return ESP_OK;
+    }
+
+    if (producer_err != ESP_OK && sink->playback_err == ESP_OK) {
+        sink->playback_err = producer_err;
+    }
+    sink->producer_done = true;
+    if (sink->playback_done) {
+        xSemaphoreTake(sink->playback_done, portMAX_DELAY);
+    }
+
+    err = producer_err == ESP_OK ? sink->playback_err : producer_err;
+    return err;
+}
+
+static esp_err_t lua_tts_sink_finish_buffered(lua_tts_audio_sink_t *sink)
+{
+    return lua_tts_sink_finish_buffered_with_status(sink, ESP_OK);
 }
 
 static esp_err_t lua_tts_sink_init(lua_tts_audio_sink_t *sink,
@@ -777,6 +980,12 @@ static void lua_tts_sink_deinit(lua_tts_audio_sink_t *sink)
 {
     if (!sink) {
         return;
+    }
+    if (sink->stream_buf) {
+        vStreamBufferDelete(sink->stream_buf);
+    }
+    if (sink->playback_done) {
+        vSemaphoreDelete(sink->playback_done);
     }
     free(sink->in_buf);
     audio_converter_destroy(&sink->converter);
@@ -888,6 +1097,10 @@ static int lua_tts_play(lua_State *L)
         lua_tts_free_runtime_dynamic(&cfg);
         return lua_tts_push_err(L, err, "tts audio sink");
     }
+    err = lua_tts_sink_start_buffered(&sink);
+    if (err != ESP_OK && err != ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "TTS source buffer unavailable, using synchronous playback: %s", esp_err_to_name(err));
+    }
     LUA_TTS_MEM_CHECKPOINT("after lua_tts_sink_init");
 
     tts_provider_config_t provider_cfg = {
@@ -904,7 +1117,13 @@ static int lua_tts_play(lua_State *L)
     err = provider->play(&provider_cfg, text, &stream);
     LUA_TTS_MEM_CHECKPOINT("after provider->play");
     if (err == ESP_OK) {
-        err = lua_tts_sink_flush(&sink);
+        if (sink.use_buffered_playback) {
+            err = lua_tts_sink_finish_buffered(&sink);
+        } else {
+            err = lua_tts_sink_flush(&sink);
+        }
+    } else if (sink.use_buffered_playback) {
+        (void)lua_tts_sink_finish_buffered_with_status(&sink, err);
     }
 
     size_t audio_bytes = sink.audio_bytes_written;
