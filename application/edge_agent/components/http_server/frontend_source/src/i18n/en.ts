@@ -23,7 +23,6 @@ export const en = {
   navMemory: 'Memory',
   navCapabilities: 'Capabilities',
   navLuaModules: 'Lua Modules',
-  navLuaModuleSelection: 'Module Selection',
   navFiles: 'Files',
   navWebIm: 'Web Chat',
 

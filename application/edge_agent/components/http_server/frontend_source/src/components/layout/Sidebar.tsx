@@ -42,7 +42,6 @@ export type LeafNode = {
     | 'navMemory'
     | 'navCapabilities'
     | 'navLuaModules'
-    | 'navLuaModuleSelection'
     | 'navFiles'
     | 'navWebIm';
   icon: Component;
@@ -51,7 +50,7 @@ export type LeafNode = {
 export type GroupNode = {
   kind: 'group';
   id: string;
-  labelKey: 'navSystemSettings' | 'navLuaModules';
+  labelKey: 'navSystemSettings';
   icon: Component;
   children: LeafNode[];
 };
@@ -74,15 +73,7 @@ export const NAV_TREE: NavNode[] = [
   { kind: 'leaf', id: 'memory', labelKey: 'navMemory', icon: IconMemory },
   { kind: 'leaf', id: 'webim', labelKey: 'navWebIm', icon: IconWebIm },
   { kind: 'leaf', id: 'capabilities', labelKey: 'navCapabilities', icon: IconCaps },
-  {
-    kind: 'group',
-    id: 'lua-modules',
-    labelKey: 'navLuaModules',
-    icon: IconSkills,
-    children: [
-      { kind: 'leaf', id: 'skills', labelKey: 'navLuaModuleSelection', icon: IconSkills },
-    ],
-  },
+  { kind: 'leaf', id: 'skills', labelKey: 'navLuaModules', icon: IconSkills },
   { kind: 'leaf', id: 'files', labelKey: 'navFiles', icon: IconFiles },
 ];
 
@@ -132,7 +123,7 @@ function readExpanded(): Set<string> {
   } catch {
     /* ignore */
   }
-  return new Set(['basic-settings', 'lua-modules']);
+  return new Set(['basic-settings']);
 }
 
 export const Sidebar: Component<SidebarProps> = (props) => {

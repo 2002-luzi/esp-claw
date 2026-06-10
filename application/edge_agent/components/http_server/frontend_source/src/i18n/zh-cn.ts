@@ -25,7 +25,6 @@ export const zhCn: Dict = {
   navMemory: '记忆管理',
   navCapabilities: 'Capabilities 管理',
   navLuaModules: 'Lua 模块管理',
-  navLuaModuleSelection: '模块选择',
   navFiles: '文件管理',
   navWebIm: '在线聊天',
 
