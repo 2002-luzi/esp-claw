@@ -45,6 +45,12 @@ typedef struct {
 #define APP_DEFAULT_LLM_SUPPORTS_TOOLS       "false"
 #define APP_DEFAULT_LLM_SUPPORTS_VISION      "false"
 #define APP_DEFAULT_LLM_IMAGE_REMOTE_URL_ONLY "false"
+#define APP_DEFAULT_TTS_PROVIDER             "xiao_mimo"
+#define APP_DEFAULT_TTS_API_KEY              ""
+#define APP_DEFAULT_TTS_BASE_URL             ""
+#define APP_DEFAULT_TTS_MODEL                ""
+#define APP_DEFAULT_TTS_VOICE                ""
+#define APP_DEFAULT_TTS_TIMEOUT_MS           "120000"
 #define APP_DEFAULT_QQ_APP_ID                ""
 #define APP_DEFAULT_QQ_APP_SECRET            ""
 #define APP_DEFAULT_QQ_MSG_TYPE              "0"
@@ -80,6 +86,12 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(llm_supports_tools, "llm_sup_tools", APP_DEFAULT_LLM_SUPPORTS_TOOLS),
     APP_CONFIG_FIELD(llm_supports_vision, "llm_sup_vis", APP_DEFAULT_LLM_SUPPORTS_VISION),
     APP_CONFIG_FIELD(llm_image_remote_url_only, "llm_img_url_o", APP_DEFAULT_LLM_IMAGE_REMOTE_URL_ONLY),
+    APP_CONFIG_FIELD(tts_provider, "tts_provider", APP_DEFAULT_TTS_PROVIDER),
+    APP_CONFIG_FIELD(tts_api_key, "tts_api_key", APP_DEFAULT_TTS_API_KEY),
+    APP_CONFIG_FIELD(tts_base_url, "tts_base_url", APP_DEFAULT_TTS_BASE_URL),
+    APP_CONFIG_FIELD(tts_model, "tts_model", APP_DEFAULT_TTS_MODEL),
+    APP_CONFIG_FIELD(tts_voice, "tts_voice", APP_DEFAULT_TTS_VOICE),
+    APP_CONFIG_FIELD(tts_timeout_ms, "tts_timeout_ms", APP_DEFAULT_TTS_TIMEOUT_MS),
     APP_CONFIG_FIELD(qq_app_id, "qq_app_id", APP_DEFAULT_QQ_APP_ID),
     APP_CONFIG_FIELD(qq_app_secret, "qq_app_secret", APP_DEFAULT_QQ_APP_SECRET),
     APP_CONFIG_FIELD(qq_msg_type, "qq_msg_type", APP_DEFAULT_QQ_MSG_TYPE),

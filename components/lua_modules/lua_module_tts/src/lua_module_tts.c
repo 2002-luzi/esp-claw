@@ -150,27 +150,6 @@ static void lua_tts_read_u32_setting(const char *key, uint32_t *out)
     }
 }
 
-static void lua_tts_read_int_setting(const char *key, int *out, int min_value, int max_value)
-{
-    char value[TTS_SHORT_STR_LEN] = {0};
-    char fallback[TTS_SHORT_STR_LEN] = {0};
-    long parsed;
-
-    if (!key || !out) {
-        return;
-    }
-
-    snprintf(fallback, sizeof(fallback), "%d", *out);
-    if (settings_store_get_string(key, value, sizeof(value), fallback) != ESP_OK || value[0] == '\0') {
-        return;
-    }
-
-    parsed = strtol(value, NULL, 10);
-    if (parsed >= min_value && parsed <= max_value) {
-        *out = (int)parsed;
-    }
-}
-
 static void lua_tts_load_defaults(lua_tts_runtime_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
@@ -866,7 +845,6 @@ static int lua_tts_play(lua_State *L)
     if (field_err) {
         return field_err;
     }
-
     LUA_TTS_MEM_CHECKPOINT("lua_tts_play entry");
 
     lua_tts_lock();
